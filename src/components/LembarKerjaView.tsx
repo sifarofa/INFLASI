@@ -4,9 +4,12 @@ import {
   ArrowUp,
   ArrowUpDown,
   Calculator,
+  CheckCircle2,
   Download,
   Edit3,
+  Loader2,
   Lock,
+  RefreshCw,
   RotateCcw,
   Search,
 } from 'lucide-react';
@@ -18,7 +21,14 @@ import type {
   RegionCode,
   RegionLKResult,
 } from '../types/inflasi';
-import { getCurrentMonthLabel, getPrevMonthLabel, getRegionInfo, REGIONS } from '../data/regions';
+import type { SupabaseConnectionStatus } from '../lib/supabase';
+import {
+  formatPeriodLabel,
+  getCurrentMonthLabel,
+  getPrevMonthLabel,
+  getRegionInfo,
+  KAB_KOTA_CODES,
+} from '../data/regions';
 import { formatAndil, formatIndex, formatNK, formatNumber, formatSignedPct } from '../utils/formatters';
 import { exportSingleRegionWorkbook } from '../utils/excelExporter';
 
@@ -28,7 +38,12 @@ interface LembarKerjaViewProps {
   selectedRegion: RegionCode;
   userRole: AdminRole;
   allowedRegion: RegionCode;
-  onSelectRegion: (code: RegionCode) => void;
+  connectionStatus?: SupabaseConnectionStatus;
+  onRolloverPrevMonth?: (targetRegions: KabKotaCode[]) => Promise<{
+    totalRolledRows: number;
+    prevPeriod: PeriodSelection;
+    perRegionCounts: Partial<Record<KabKotaCode, number>>;
+  }>;
   onUpdateCommodityInput: (
     regionCode: KabKotaCode,
     kode: string,
@@ -60,7 +75,8 @@ export const LembarKerjaView: React.FC<LembarKerjaViewProps> = ({
   selectedRegion,
   userRole,
   allowedRegion,
-  onSelectRegion,
+  connectionStatus = 'local',
+  onRolloverPrevMonth,
   onUpdateCommodityInput,
 }) => {
   const isProvinsi = userRole === 'PROVINSI';
@@ -71,6 +87,10 @@ export const LembarKerjaView: React.FC<LembarKerjaViewProps> = ({
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [sortKey, setSortKey] = useState<LKSortKey>('DEFAULT');
   const [sortDir, setSortDir] = useState<SortDir>('asc');
+  const [isRollingOver, setIsRollingOver] = useState<boolean>(false);
+  const [rolloverNotice, setRolloverNotice] = useState<{ type: 'ok' | 'err'; text: string } | null>(
+    null
+  );
   const [editingCell, setEditingCell] = useState<{
     kode: string;
     field: 'nkPrev' | 'rhCurrent';
@@ -199,40 +219,12 @@ export const LembarKerjaView: React.FC<LembarKerjaViewProps> = ({
     return 'text-slate-600';
   };
 
-  const availableRegions = isProvinsi
-    ? REGIONS
-    : REGIONS.filter((r) => r.code === allowedRegion);
-
   return (
     <div className="space-y-4">
       {/* Filter & Legend Bar */}
       <div className="rounded-lg border border-slate-200 bg-white p-4 space-y-3">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2.5">
-            <div>
-              <label
-                htmlFor="lk-region"
-                className="block text-xs font-bold text-slate-700 mb-1"
-              >
-                Wilayah
-              </label>
-              <select
-                id="lk-region"
-                value={activeRegion}
-                disabled={!isProvinsi}
-                onChange={(e) => {
-                  setEditingCell(null);
-                  onSelectRegion(e.target.value as RegionCode);
-                }}
-                className="h-9 rounded-md border border-slate-300 bg-white px-3 text-xs font-bold text-slate-900 focus:border-slate-900 focus:outline-none disabled:bg-slate-100"
-              >
-                {availableRegions.map((r) => (
-                  <option key={r.code} value={r.code}>
-                    {r.code} — {r.name}
-                  </option>
-                ))}
-              </select>
-            </div>
 
             <div>
               <label
@@ -298,7 +290,7 @@ export const LembarKerjaView: React.FC<LembarKerjaViewProps> = ({
             </div>
           </div>
 
-          <div className="flex items-end gap-2 shrink-0">
+          <div className="flex flex-wrap items-end gap-2 shrink-0">
             {sortKey !== 'DEFAULT' && (
               <button
                 type="button"
@@ -312,6 +304,47 @@ export const LembarKerjaView: React.FC<LembarKerjaViewProps> = ({
                 <span>Urutan Hierarki</span>
               </button>
             )}
+            {isProvinsi && onRolloverPrevMonth && (
+              <button
+                type="button"
+                disabled={isRollingOver || connectionStatus === 'local'}
+                onClick={async () => {
+                  setIsRollingOver(true);
+                  setRolloverNotice(null);
+                  try {
+                    const targets =
+                      activeRegion === '6100' ? KAB_KOTA_CODES : [activeRegion as KabKotaCode];
+                    const res = await onRolloverPrevMonth(targets);
+                    setRolloverNotice({
+                      type: 'ok',
+                      text: `Rollover sukses: ${res.totalRolledRows} baris dari ${formatPeriodLabel(
+                        res.prevPeriod
+                      )} disalin menjadi NK (N-1) periode aktif.`,
+                    });
+                  } catch (err) {
+                    setRolloverNotice({
+                      type: 'err',
+                      text: err instanceof Error ? err.message : 'Gagal rollover data bulan lalu.',
+                    });
+                  } finally {
+                    setIsRollingOver(false);
+                  }
+                }}
+                title={
+                  connectionStatus === 'local'
+                    ? 'Membutuhkan koneksi Supabase aktif'
+                    : `Tarik NK (N) bulan lalu menjadi NK (N-1) untuk ${activeRegion}`
+                }
+                className="h-9 inline-flex items-center gap-1.5 rounded-md border border-sky-300 bg-sky-50 px-3 text-xs font-bold text-sky-900 hover:bg-sky-100 disabled:opacity-50 whitespace-nowrap"
+              >
+                {isRollingOver ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-3.5 w-3.5" />
+                )}
+                <span>Tarik NK (N) Bulan Lalu → NK (N-1)</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={() => exportSingleRegionWorkbook(lk, period)}
@@ -322,6 +355,19 @@ export const LembarKerjaView: React.FC<LembarKerjaViewProps> = ({
             </button>
           </div>
         </div>
+
+        {rolloverNotice && (
+          <div
+            className={`rounded-md border px-3 py-2 text-xs flex items-center gap-2 ${
+              rolloverNotice.type === 'ok'
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+                : 'border-rose-200 bg-rose-50 text-rose-800'
+            }`}
+          >
+            <CheckCircle2 className="h-4 w-4 shrink-0" />
+            <span>{rolloverNotice.text}</span>
+          </div>
+        )}
 
         {/* Column Legend Strip */}
         <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100 text-[11px] text-slate-600">

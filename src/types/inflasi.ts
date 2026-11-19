@@ -138,11 +138,24 @@ export interface UploadMappingResult {
   updatesMap: Record<string, number>;
   /** Number of empty or <=0 RH rows automatically defaulted to 100 */
   replacedEmptyCount?: number;
-  /** Populated when kind === 'NK0' to update regional Pakom + register any new nodes */
+  /** Regional codes detected if file has a Kode Kota column */
+  detectedRegionCodes?: string[];
+  /** Applied filter region if filtered from multi-region file */
+  filteredRegionCode?: string;
+  /** Populated when kind === 'NK0' (or NK_PREV with Pakom sync) to update regional Pakom + register any new nodes */
   pakomCodes?: string[];
   addedToPakomCount?: number;
   removedFromPakomCount?: number;
   newHierarchyNodes?: HierarchyNodeMeta[];
+  /** Optional derived NK0 map when syncing Pakom from NK + IHK file */
+  derivedNk0Map?: Record<string, number>;
+}
+
+export interface Nk0RegionMeta {
+  pakomCount: number;
+  savedAt: string;
+  fileName: string;
+  isCustom: boolean;
 }
 
 export interface UpdateHistoryEntry {
@@ -150,7 +163,7 @@ export interface UpdateHistoryEntry {
   timestamp: string;
   regionCode: KabKotaCode;
   period: PeriodSelection;
-  kind: UploadFileKind | 'INLINE_EDIT';
+  kind: UploadFileKind | 'INLINE_EDIT' | 'ROLLOVER' | 'RESPONDEN_SYNC';
   fileName: string;
   matchedCount: number;
   unmatchedCount: number;
@@ -219,6 +232,7 @@ export interface PersistedInflationState {
   version: number;
   period: PeriodSelection;
   kabKotaInputs: Record<KabKotaCode, Record<string, CommodityInputRow>>;
+  nk0Meta?: Partial<Record<KabKotaCode, Nk0RegionMeta>>;
   customHierarchyNodes: Record<string, HierarchyNodeMeta>;
   history: UpdateHistoryEntry[];
   respondentDatasets: Record<string, RespondentRHDataset>;

@@ -2,8 +2,11 @@ import { useState } from 'react';
 import {
   BarChart3,
   ChevronDown,
+  Database,
   Download,
   FileSpreadsheet,
+  HardDrive,
+  Loader2,
   LogOut,
   Menu,
   RotateCcw,
@@ -13,7 +16,7 @@ import {
   Users,
   X,
 } from 'lucide-react';
-import type { AuthSession, RegionCode } from './types/inflasi';
+import type { AuthSession, KabKotaCode, RegionCode } from './types/inflasi';
 import { BULAN_OPTIONS, formatPeriodLabel, REGIONS } from './data/regions';
 import { useInflationStore } from './hooks/useInflationStore';
 import {
@@ -35,14 +38,18 @@ export default function App() {
   const {
     period,
     kabKotaInputs,
+    nk0Meta,
     allNodes,
     history,
     respondentDatasets,
     results,
     jejerRows,
+    connectionStatus,
+    supabaseError,
     setPeriod,
     applyMonthlyUpload,
     updateCommodityInput,
+    rolloverPrevMonthNK,
     setRespondentDataset,
     resetToInitialData,
   } = useInflationStore();
@@ -53,6 +60,12 @@ export default function App() {
     const stored = loadStoredSession();
     return stored ? stored.regionCode : '6100';
   });
+  const [lastKabKota, setLastKabKota] = useState<KabKotaCode>(() => {
+    const stored = loadStoredSession();
+    return stored && stored.regionCode !== '6100'
+      ? (stored.regionCode as KabKotaCode)
+      : '6107';
+  });
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [confirmResetOpen, setConfirmResetOpen] = useState(false);
@@ -61,6 +74,9 @@ export default function App() {
     saveStoredSession(newSession);
     setSession(newSession);
     setSelectedRegion(newSession.regionCode);
+    if (newSession.regionCode !== '6100') {
+      setLastKabKota(newSession.regionCode as KabKotaCode);
+    }
     setActiveTab('dashboard');
     setSidebarOpen(false);
     setExportMenuOpen(false);
@@ -80,63 +96,121 @@ export default function App() {
   }
 
   const isProvinsi = session.role === 'PROVINSI';
-  const effectiveRegion: RegionCode = isProvinsi ? selectedRegion : session.regionCode;
 
   const navItems: Array<{
     id: ActiveTab;
     label: string;
     subtitle: string;
     icon: typeof BarChart3;
-  }> = [
-    {
-      id: 'dashboard',
-      label: 'Dashboard',
-      subtitle: 'Ringkasan & Tabel Jejer',
-      icon: BarChart3,
-    },
-    {
-      id: 'lk',
-      label: 'Lembar Kerja',
-      subtitle: 'Rincian IHK per Wilayah',
-      icon: Table2,
-    },
-    {
-      id: 'update',
-      label: 'Update Data',
-      subtitle: 'Unggah NK0, NK & RH',
-      icon: UploadCloud,
-    },
-    {
-      id: 'responden',
-      label: 'RH Responden',
-      subtitle: 'Harga Tingkat Responden',
-      icon: Users,
-    },
-    {
-      id: 'ranking',
-      label: 'Ranking INF(MoM)',
-      subtitle: 'Angka Sementara & Kalbar',
-      icon: Trophy,
-    },
-  ];
+  }> = isProvinsi
+    ? [
+        {
+          id: 'dashboard',
+          label: 'Dashboard',
+          subtitle: 'Ringkasan & Tabel Jejer',
+          icon: BarChart3,
+        },
+        {
+          id: 'lk',
+          label: 'Lembar Kerja',
+          subtitle: 'Rincian IHK per Wilayah',
+          icon: Table2,
+        },
+        {
+          id: 'update',
+          label: 'Update Data',
+          subtitle: 'Unggah NK0, NK & RH',
+          icon: UploadCloud,
+        },
+        {
+          id: 'responden',
+          label: 'RH Responden',
+          subtitle: 'Harga Tingkat Responden',
+          icon: Users,
+        },
+        {
+          id: 'ranking',
+          label: 'Ranking INF(MoM)',
+          subtitle: 'Angka Sementara & Kalbar',
+          icon: Trophy,
+        },
+      ]
+    : [
+        {
+          id: 'dashboard',
+          label: 'Dashboard',
+          subtitle: 'Ringkasan Inflasi Wilayah',
+          icon: BarChart3,
+        },
+        {
+          id: 'lk',
+          label: 'Lembar Kerja',
+          subtitle: 'Rincian IHK Wilayah',
+          icon: Table2,
+        },
+        {
+          id: 'responden',
+          label: 'RH Responden',
+          subtitle: 'Data Responden Wilayah',
+          icon: Users,
+        },
+      ];
 
-  const activeNavMeta = navItems.find((item) => item.id === activeTab) ?? navItems[0];
+  // Enforce RBAC guard on active tab for KABKOTA role
+  const safeTab: ActiveTab =
+    !isProvinsi && (activeTab === 'update' || activeTab === 'ranking')
+      ? 'dashboard'
+      : activeTab;
 
-  const handleOpenLK = (code: RegionCode) => {
-    setSelectedRegion(isProvinsi ? code : session.regionCode);
-    setActiveTab('lk');
-    setSidebarOpen(false);
-  };
+  const isKabKotaScopedTab = safeTab === 'update' || safeTab === 'responden';
+
+  // Single Source of Truth for active region across top toolbar + active view
+  const effectiveRegion: RegionCode = !isProvinsi
+    ? session.regionCode
+    : isKabKotaScopedTab && selectedRegion === '6100'
+    ? lastKabKota
+    : selectedRegion;
+
+  const effectiveKabKota: KabKotaCode =
+    effectiveRegion === '6100' ? lastKabKota : (effectiveRegion as KabKotaCode);
+
+  const activeNavMeta = navItems.find((item) => item.id === safeTab) ?? navItems[0];
 
   const handleSelectRegion = (code: RegionCode) => {
     if (!isProvinsi) return;
     setSelectedRegion(code);
+    if (code !== '6100') {
+      setLastKabKota(code as KabKotaCode);
+    }
+  };
+
+  const handleOpenLK = (code: RegionCode) => {
+    if (isProvinsi) {
+      setSelectedRegion(code);
+      if (code !== '6100') setLastKabKota(code as KabKotaCode);
+    } else {
+      setSelectedRegion(session.regionCode);
+    }
+    setActiveTab('lk');
+    setSidebarOpen(false);
   };
 
   const handleSelectTab = (tabId: ActiveTab) => {
+    if (!isProvinsi && (tabId === 'update' || tabId === 'ranking')) {
+      setActiveTab('dashboard');
+      setSidebarOpen(false);
+      return;
+    }
+    if (isProvinsi && (tabId === 'update' || tabId === 'responden') && selectedRegion === '6100') {
+      setSelectedRegion(lastKabKota);
+    }
     setActiveTab(tabId);
     setSidebarOpen(false);
   };
+
+  const topbarRegionOptions = isKabKotaScopedTab
+    ? REGIONS.filter((r) => !r.isAggregated)
+    : REGIONS;
 
   const sidebarContent = (
     <div className="flex h-full flex-col bg-slate-900 text-slate-100">
@@ -169,7 +243,7 @@ export default function App() {
         </div>
         {navItems.map((tab) => {
           const Icon = tab.icon;
-          const isActive = activeTab === tab.id;
+          const isActive = safeTab === tab.id;
           return (
             <button
               key={tab.id}
@@ -240,9 +314,9 @@ export default function App() {
 
       {/* Right Workspace Column */}
       <div className="flex-1 min-w-0 flex flex-col">
-        {/* Top Context Header */}
-        <header className="sticky top-0 z-30 h-14 border-b border-slate-200 bg-white">
-          <div className="h-full px-4 sm:px-6 flex items-center justify-between gap-4">
+        {/* Top Context Header: Breadcrumb + Period Selector + Connection Badge + Actions */}
+        <header className="sticky top-0 z-30 min-h-14 border-b border-slate-200 bg-white">
+          <div className="px-4 sm:px-6 py-2 flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-3 min-w-0">
               <button
                 type="button"
@@ -266,8 +340,73 @@ export default function App() {
               </div>
             </div>
 
-            <div className="flex items-center gap-2 shrink-0 relative">
-              {isProvinsi && activeTab !== 'ranking' && (
+            <div className="flex flex-wrap items-center gap-2.5 shrink-0 relative">
+              {/* Pemilih Periode Aktif (Bulan & Tahun) di Header Utama */}
+              <div className="flex items-center gap-1.5">
+                <label htmlFor="global-month" className="text-xs font-semibold text-slate-500 whitespace-nowrap">
+                  Periode:
+                </label>
+                <select
+                  id="global-month"
+                  value={period.month}
+                  onChange={(e) => setPeriod({ ...period, month: Number(e.target.value) })}
+                  className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-bold text-slate-900 focus:border-slate-900 focus:outline-none"
+                >
+                  {BULAN_OPTIONS.map((b) => (
+                    <option key={b.value} value={b.value}>
+                      {b.label}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  aria-label="Tahun periode"
+                  type="number"
+                  min={2020}
+                  max={2035}
+                  value={period.year}
+                  onChange={(e) =>
+                    setPeriod({ ...period, year: Number(e.target.value) || period.year })
+                  }
+                  className="w-16 rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-mono font-bold text-slate-900 tabular-nums focus:border-slate-900 focus:outline-none"
+                />
+              </div>
+
+              {/* Badge Status Koneksi Supabase / Mode Lokal */}
+              <div
+                title={
+                  connectionStatus === 'connected'
+                    ? 'Tersinkronisasi langsung dengan Supabase (inflasi_lk_data, inflasi_upload_logs, inflasi_harga_responden)'
+                    : connectionStatus === 'syncing'
+                    ? 'Sedang menyinkronkan data dengan Supabase...'
+                    : supabaseError ?? 'Berjalan pada Mode Lokal (VITE_SUPABASE_URL belum diatur)'
+                }
+                className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-semibold whitespace-nowrap shrink-0 ${
+                  connectionStatus === 'connected'
+                    ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
+                    : connectionStatus === 'syncing'
+                    ? 'border-sky-300 bg-sky-50 text-sky-800'
+                    : 'border-amber-300 bg-amber-50 text-amber-800'
+                }`}
+              >
+                {connectionStatus === 'connected' ? (
+                  <>
+                    <Database className="h-3.5 w-3.5 text-emerald-700 shrink-0" />
+                    <span>Supabase Terhubung</span>
+                  </>
+                ) : connectionStatus === 'syncing' ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 text-sky-700 animate-spin shrink-0" />
+                    <span>Sinkronisasi...</span>
+                  </>
+                ) : (
+                  <>
+                    <HardDrive className="h-3.5 w-3.5 text-amber-700 shrink-0" />
+                    <span>Mode Lokal</span>
+                  </>
+                )}
+              </div>
+
+              {isProvinsi && safeTab !== 'ranking' && (
                 <div className="relative">
                   <button
                     type="button"
@@ -275,7 +414,7 @@ export default function App() {
                       setExportMenuOpen(false);
                       setConfirmResetOpen((v) => !v);
                     }}
-                    className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 whitespace-nowrap"
+                    className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 whitespace-nowrap"
                     title="Reset ke Data Awal"
                   >
                     <RotateCcw className="h-3.5 w-3.5" />
@@ -314,7 +453,7 @@ export default function App() {
                 </div>
               )}
 
-              {activeTab !== 'ranking' && (
+              {safeTab !== 'ranking' && (
                 <div className="relative">
                   {isProvinsi ? (
                     <>
@@ -324,7 +463,7 @@ export default function App() {
                           setConfirmResetOpen(false);
                           setExportMenuOpen((v) => !v);
                         }}
-                        className="inline-flex items-center gap-1.5 rounded-md bg-sky-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-sky-800 whitespace-nowrap"
+                        className="inline-flex items-center gap-1.5 rounded-md bg-sky-700 px-3 py-1 text-xs font-bold text-white hover:bg-sky-800 whitespace-nowrap"
                       >
                         <Download className="h-3.5 w-3.5" />
                         <span>Export Excel</span>
@@ -376,7 +515,7 @@ export default function App() {
                     <button
                       type="button"
                       onClick={() => exportSingleRegionWorkbook(results[effectiveRegion], period)}
-                      className="inline-flex items-center gap-1.5 rounded-md bg-sky-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-sky-800 whitespace-nowrap"
+                      className="inline-flex items-center gap-1.5 rounded-md bg-sky-700 px-3 py-1 text-xs font-bold text-white hover:bg-sky-800 whitespace-nowrap"
                     >
                       <Download className="h-3.5 w-3.5" />
                       <span>Export LK {effectiveRegion}</span>
@@ -388,10 +527,10 @@ export default function App() {
           </div>
         </header>
 
-        {/* Secondary Context Toolbar (for LK/Dashboard/Update/Responden views) */}
-        {activeTab !== 'ranking' && (
+        {/* Single Unified Context Toolbar (Source of truth for active Wilayah across Dashboard, LK, Update Data & Responden) */}
+        {safeTab !== 'ranking' && (
           <div className="border-b border-slate-200 bg-white">
-            <div className="px-4 sm:px-6 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div className="px-4 sm:px-6 py-2 flex flex-wrap items-center justify-between gap-3 text-xs">
               <div className="flex flex-wrap items-center gap-2.5 text-slate-600 font-medium">
                 <span>
                   Periode: <strong className="font-bold text-slate-900">{formatPeriodLabel(period)}</strong>
@@ -406,62 +545,32 @@ export default function App() {
                 </span>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2">
-                {isProvinsi && (
-                  <>
-                    <label htmlFor="global-region" className="text-xs font-semibold text-slate-500">
-                      Wilayah:
-                    </label>
-                    <select
-                      id="global-region"
-                      value={effectiveRegion}
-                      onChange={(e) => handleSelectRegion(e.target.value as RegionCode)}
-                      className="rounded border border-slate-300 bg-white px-2.5 py-1 text-xs font-bold text-slate-900 focus:border-slate-900 focus:outline-none"
-                    >
-                      {REGIONS.map((r) => (
-                        <option key={r.code} value={r.code}>
-                          {r.code} — {r.shortName}
-                        </option>
-                      ))}
-                    </select>
-                  </>
-                )}
-
-                <label htmlFor="global-month" className="text-xs font-semibold text-slate-500 ml-1">
-                  Bulan:
-                </label>
-                <select
-                  id="global-month"
-                  value={period.month}
-                  onChange={(e) => setPeriod({ ...period, month: Number(e.target.value) })}
-                  className="rounded border border-slate-300 bg-white px-2.5 py-1 text-xs font-bold text-slate-900 focus:border-slate-900 focus:outline-none"
-                >
-                  {BULAN_OPTIONS.map((b) => (
-                    <option key={b.value} value={b.value}>
-                      {b.label}
-                    </option>
-                  ))}
-                </select>
-
-                <input
-                  aria-label="Tahun periode"
-                  type="number"
-                  min={2020}
-                  max={2035}
-                  value={period.year}
-                  onChange={(e) =>
-                    setPeriod({ ...period, year: Number(e.target.value) || period.year })
-                  }
-                  className="w-16 rounded border border-slate-300 bg-white px-2 py-1 text-xs font-mono font-bold text-slate-900 focus:border-slate-900 focus:outline-none"
-                />
-              </div>
+              {isProvinsi && (
+                <div className="flex items-center gap-2">
+                  <label htmlFor="global-region" className="text-xs font-semibold text-slate-500">
+                    Wilayah Aktif:
+                  </label>
+                  <select
+                    id="global-region"
+                    value={effectiveRegion}
+                    onChange={(e) => handleSelectRegion(e.target.value as RegionCode)}
+                    className="rounded border border-slate-300 bg-white px-2.5 py-1 text-xs font-bold text-slate-900 focus:border-slate-900 focus:outline-none"
+                  >
+                    {topbarRegionOptions.map((r) => (
+                      <option key={r.code} value={r.code}>
+                        {r.code} — {r.shortName}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
             </div>
           </div>
         )}
 
         {/* Main Viewport */}
         <main className="mx-auto max-w-[1440px] w-full flex-1 px-4 sm:px-6 py-6">
-          {activeTab === 'dashboard' && (
+          {safeTab === 'dashboard' && (
             <DashboardView
               results={results}
               jejerRows={jejerRows}
@@ -474,43 +583,67 @@ export default function App() {
             />
           )}
 
-          {activeTab === 'lk' && (
+          {safeTab === 'lk' && (
             <LembarKerjaView
               results={results}
               period={period}
               selectedRegion={effectiveRegion}
               userRole={session.role}
               allowedRegion={session.regionCode}
-              onSelectRegion={handleSelectRegion}
+              connectionStatus={connectionStatus}
+              onRolloverPrevMonth={isProvinsi ? rolloverPrevMonthNK : undefined}
               onUpdateCommodityInput={updateCommodityInput}
             />
           )}
 
-          {activeTab === 'update' && (
+          {safeTab === 'update' && isProvinsi && (
             <UpdateDataView
               period={period}
+              selectedRegion={effectiveKabKota}
               kabKotaInputs={kabKotaInputs}
+              nk0Meta={nk0Meta}
               allNodes={allNodes}
               results={results}
               history={history}
               userRole={session.role}
-              allowedRegion={session.regionCode}
+              connectionStatus={connectionStatus}
+              onSelectRegion={handleSelectRegion}
               onApplyMonthlyUpload={applyMonthlyUpload}
+              onRolloverPrevMonth={rolloverPrevMonthNK}
               onNavigateToLK={handleOpenLK}
             />
           )}
 
-          {activeTab === 'responden' && (
+          {safeTab === 'responden' && (
             <RespondentRHView
               period={period}
+              selectedRegion={effectiveKabKota}
               datasets={respondentDatasets}
               userRole={session.role}
               allowedRegion={session.regionCode}
               onSetDataset={setRespondentDataset}
+              onApplyCalculatedRhToLK={
+                isProvinsi
+                  ? (regionCode, rhUpdates, sourceLabel) =>
+                      applyMonthlyUpload({
+                        regionCode,
+                        period,
+                        rhUpdates,
+                        logs: [
+                          {
+                            kind: 'RESPONDEN_SYNC',
+                            fileName: sourceLabel,
+                            matchedCount: Object.keys(rhUpdates).length,
+                            unmatchedCount: 0,
+                          },
+                        ],
+                      })
+                  : undefined
+              }
             />
           )}
 
-          {activeTab === 'ranking' && <AngkaSementaraRankingView />}
+          {safeTab === 'ranking' && isProvinsi && <AngkaSementaraRankingView />}
         </main>
       </div>
     </div>

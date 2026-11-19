@@ -11,6 +11,9 @@ import {
   FileSpreadsheet,
   History,
   Layers,
+  Loader2,
+  Lock,
+  RefreshCw,
   Save,
   Upload,
 } from 'lucide-react';
@@ -19,6 +22,7 @@ import type {
   CommodityInputRow,
   HierarchyNodeMeta,
   KabKotaCode,
+  Nk0RegionMeta,
   PeriodSelection,
   RegionCode,
   RegionLKResult,
@@ -26,7 +30,15 @@ import type {
   UploadFileKind,
   UploadMappingResult,
 } from '../types/inflasi';
-import { BULAN_OPTIONS, formatPeriodLabel, REGIONS } from '../data/regions';
+import type { SupabaseConnectionStatus } from '../lib/supabase';
+import {
+  formatPeriodLabel,
+  getCurrentMonthLabel,
+  getPrevMonthLabel,
+  getRegionInfo,
+  KAB_KOTA_CODES,
+  REGIONS,
+} from '../data/regions';
 import {
   fillMissingPakomRhWith100,
   mapUploadedRowsToRegion,
@@ -37,12 +49,15 @@ import { exportUploadTemplateWorkbook } from '../utils/excelExporter';
 
 interface UpdateDataViewProps {
   period: PeriodSelection;
+  selectedRegion: KabKotaCode;
   kabKotaInputs: Record<KabKotaCode, Record<string, CommodityInputRow>>;
+  nk0Meta: Partial<Record<KabKotaCode, Nk0RegionMeta>>;
   allNodes: HierarchyNodeMeta[];
   results: Record<RegionCode, RegionLKResult>;
   history: UpdateHistoryEntry[];
   userRole: AdminRole;
-  allowedRegion: RegionCode;
+  connectionStatus: SupabaseConnectionStatus;
+  onSelectRegion: (code: RegionCode) => void;
   onApplyMonthlyUpload: (params: {
     regionCode: KabKotaCode;
     period: PeriodSelection;
@@ -50,16 +65,28 @@ interface UpdateDataViewProps {
       pakomCodes: string[];
       updatesMap: Record<string, number>;
       newHierarchyNodes?: HierarchyNodeMeta[];
+      fileName?: string;
     };
     nkUpdates?: Record<string, number>;
+    nkPrevPakomSync?: {
+      pakomCodes: string[];
+      derivedNk0Map: Record<string, number>;
+      newHierarchyNodes?: HierarchyNodeMeta[];
+      fileName?: string;
+    };
     rhUpdates?: Record<string, number>;
     logs: Array<{
-      kind: UploadFileKind;
+      kind: UpdateHistoryEntry['kind'];
       fileName: string;
       matchedCount: number;
       unmatchedCount: number;
     }>;
-  }) => void;
+  }) => Promise<{ syncedToSupabase: boolean; savedRows: number; error?: string }>;
+  onRolloverPrevMonth: (targetRegions: KabKotaCode[]) => Promise<{
+    totalRolledRows: number;
+    prevPeriod: PeriodSelection;
+    perRegionCounts: Partial<Record<KabKotaCode, number>>;
+  }>;
   onNavigateToLK: (code: RegionCode) => void;
 }
 
@@ -67,22 +94,23 @@ type PreviewSortKey = 'KODE' | 'NAMA' | 'STATUS' | 'OLD' | 'NEW' | 'DIFF';
 
 export const UpdateDataView: React.FC<UpdateDataViewProps> = ({
   period,
+  selectedRegion,
   kabKotaInputs,
+  nk0Meta,
   allNodes,
   results,
   history,
   userRole,
-  allowedRegion,
+  connectionStatus,
+  onSelectRegion,
   onApplyMonthlyUpload,
+  onRolloverPrevMonth,
   onNavigateToLK,
 }) => {
   const isProvinsi = userRole === 'PROVINSI';
-  const defaultKab: KabKotaCode =
-    allowedRegion !== '6100' ? (allowedRegion as KabKotaCode) : '6107';
-
-  const [targetRegion, setTargetRegion] = useState<KabKotaCode>(defaultKab);
-  const [targetMonth, setTargetMonth] = useState<number>(period.month);
-  const [targetYear, setTargetYear] = useState<number>(period.year);
+  const targetRegion = selectedRegion;
+  const targetMeta = getRegionInfo(targetRegion);
+  const currentNk0Meta = nk0Meta[targetRegion];
 
   const [nk0Mapping, setNk0Mapping] = useState<UploadMappingResult | null>(null);
   const [nkMapping, setNkMapping] = useState<UploadMappingResult | null>(null);
@@ -92,45 +120,88 @@ export const UpdateDataView: React.FC<UpdateDataViewProps> = ({
   const [nkError, setNkError] = useState<string | null>(null);
   const [rhError, setRhError] = useState<string | null>(null);
 
-  const [activePreviewTab, setActivePreviewTab] = useState<UploadFileKind>('NK0');
+  const [activePreviewTab, setActivePreviewTab] = useState<UploadFileKind>('NK_PREV');
   const [showOnlyChanged, setShowOnlyChanged] = useState<boolean>(true);
   const [showUnmatched, setShowUnmatched] = useState<boolean>(false);
   const [fillEmptyRhWith100, setFillEmptyRhWith100] = useState<boolean>(true);
+  const [resetUnlistedRhTo100, setResetUnlistedRhTo100] = useState<boolean>(true);
+  const [syncPakomFromNk, setSyncPakomFromNk] = useState<boolean>(!currentNk0Meta?.isCustom);
   const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
+  const [saveErrorMsg, setSaveErrorMsg] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState<boolean>(false);
+  const [isRollingOver, setIsRollingOver] = useState<boolean>(false);
   const [previewSortKey, setPreviewSortKey] = useState<PreviewSortKey>('DIFF');
   const [previewSortDir, setPreviewSortDir] = useState<'asc' | 'desc'>('desc');
 
+  // Keep staged previews clean when top-bar region changes
   useEffect(() => {
-    if (!isProvinsi && allowedRegion !== '6100') {
-      setTargetRegion(allowedRegion as KabKotaCode);
-    }
-  }, [isProvinsi, allowedRegion]);
+    setNk0Mapping(null);
+    setNkMapping(null);
+    setRhMapping(null);
+    setNk0Error(null);
+    setNkError(null);
+    setRhError(null);
+    setSaveSuccessMsg(null);
+    setSaveErrorMsg(null);
+    setSyncPakomFromNk(!nk0Meta[targetRegion]?.isCustom);
+  }, [targetRegion, nk0Meta]);
 
-  const kabKotaList = isProvinsi
-    ? REGIONS.filter((r) => !r.isAggregated)
-    : REGIONS.filter((r) => r.code === allowedRegion);
+  if (!isProvinsi) {
+    return (
+      <section className="rounded-lg border border-slate-200 bg-white p-8 text-center">
+        <Lock className="h-7 w-7 text-slate-400 mx-auto mb-2.5" />
+        <h3 className="text-sm font-bold text-slate-900">
+          Akses Unggah Data Khusus Admin Provinsi
+        </h3>
+        <p className="mt-1 text-xs text-slate-500 max-w-md mx-auto">
+          Pembaruan database NK0 (Pakom), NK (N-1), dan RH (N) dikelola secara terpusat oleh Admin Provinsi (6100).
+        </p>
+      </section>
+    );
+  }
+
+  const kabKotaList = REGIONS.filter((r) => !r.isAggregated);
   const currentPakomCount = Object.keys(kabKotaInputs[targetRegion] ?? {}).length;
+  const prevMonthLabel = getPrevMonthLabel(period);
+  const currMonthLabel = getCurrentMonthLabel(period);
 
-  const visibleHistory = useMemo(
-    () => (isProvinsi ? history : history.filter((h) => h.regionCode === allowedRegion)),
-    [isProvinsi, history, allowedRegion]
-  );
-
-  // Build effective inputs & nodes considering staged NK0 upload in the same batch
-  const getEffectiveInputsAndNodes = () => {
+  // Build effective inputs & nodes considering staged NK0 upload or NK Pakom sync in same batch
+  const getEffectiveInputsAndNodes = (stagedNk0?: UploadMappingResult | null, stagedNk?: UploadMappingResult | null) => {
     const baseInputs = kabKotaInputs[targetRegion] ?? {};
-    if (!nk0Mapping || !nk0Mapping.pakomCodes) {
-      return { effectiveInputs: baseInputs, effectiveNodes: allNodes };
+    const activeNk0 = stagedNk0 !== undefined ? stagedNk0 : nk0Mapping;
+    const activeNk = stagedNk !== undefined ? stagedNk : nkMapping;
+
+    if (activeNk0?.pakomCodes) {
+      const stagedInputs: Record<string, CommodityInputRow> = {};
+      for (const kode of activeNk0.pakomCodes) {
+        const val = activeNk0.updatesMap[kode] ?? 0;
+        stagedInputs[kode] = baseInputs[kode]
+          ? { ...baseInputs[kode], nk0: val }
+          : { kode, nk0: val, nkPrev: val, rhCurrent: 100 };
+      }
+      return {
+        effectiveInputs: stagedInputs,
+        effectiveNodes: [...allNodes, ...(activeNk0.newHierarchyNodes ?? [])],
+      };
     }
-    const stagedInputs: Record<string, CommodityInputRow> = {};
-    for (const kode of nk0Mapping.pakomCodes) {
-      const val = nk0Mapping.updatesMap[kode] ?? 0;
-      stagedInputs[kode] = baseInputs[kode]
-        ? { ...baseInputs[kode], nk0: val }
-        : { kode, nk0: val, nkPrev: val, rhCurrent: 100 };
+
+    if (activeNk?.pakomCodes && activeNk?.derivedNk0Map) {
+      const stagedInputs: Record<string, CommodityInputRow> = {};
+      for (const kode of activeNk.pakomCodes) {
+        const prevRow = baseInputs[kode];
+        const nk0Val = prevRow?.nk0 ?? activeNk.derivedNk0Map[kode] ?? 0;
+        const nkPrevVal = activeNk.updatesMap[kode] ?? prevRow?.nkPrev ?? nk0Val;
+        stagedInputs[kode] = prevRow
+          ? { ...prevRow, nk0: nk0Val, nkPrev: nkPrevVal }
+          : { kode, nk0: nk0Val, nkPrev: nkPrevVal, rhCurrent: 100 };
+      }
+      return {
+        effectiveInputs: stagedInputs,
+        effectiveNodes: [...allNodes, ...(activeNk.newHierarchyNodes ?? [])],
+      };
     }
-    const mergedNodes = [...allNodes, ...(nk0Mapping.newHierarchyNodes ?? [])];
-    return { effectiveInputs: stagedInputs, effectiveNodes: mergedNodes };
+
+    return { effectiveInputs: baseInputs, effectiveNodes: allNodes };
   };
 
   const processUpload = async (
@@ -148,16 +219,26 @@ export const UpdateDataView: React.FC<UpdateDataViewProps> = ({
       const { effectiveInputs, effectiveNodes } =
         kind === 'NK0'
           ? { effectiveInputs: kabKotaInputs[targetRegion] ?? {}, effectiveNodes: allNodes }
+          : kind === 'NK_PREV'
+          ? getEffectiveInputsAndNodes(nk0Mapping, null)
           : getEffectiveInputsAndNodes();
 
-      const mapped = mapUploadedRowsToRegion(
+      let mapped = mapUploadedRowsToRegion(
         rows,
         kind,
         fileName,
         effectiveInputs,
         effectiveNodes,
-        { fillEmptyRhWith100 }
+        {
+          fillEmptyRhWith100,
+          targetRegion,
+          syncPakomFromNk: kind === 'NK_PREV' && !nk0Mapping ? syncPakomFromNk : false,
+        }
       );
+
+      if (kind === 'RH_CURRENT' && resetUnlistedRhTo100) {
+        mapped = fillMissingPakomRhWith100(mapped, effectiveInputs, effectiveNodes);
+      }
 
       if (kind === 'NK0') {
         setNk0Mapping(mapped);
@@ -204,11 +285,11 @@ export const UpdateDataView: React.FC<UpdateDataViewProps> = ({
     }
   };
 
-  const handleSaveUpdates = () => {
+  const handleSaveUpdates = async () => {
     if (!nk0Mapping && !nkMapping && !rhMapping) return;
 
     const logs: Array<{
-      kind: UploadFileKind;
+      kind: UpdateHistoryEntry['kind'];
       fileName: string;
       matchedCount: number;
       unmatchedCount: number;
@@ -239,36 +320,73 @@ export const UpdateDataView: React.FC<UpdateDataViewProps> = ({
       });
     }
 
-    onApplyMonthlyUpload({
-      regionCode: targetRegion,
-      period: { month: targetMonth, year: targetYear },
-      nk0Update:
-        nk0Mapping && nk0Mapping.pakomCodes
-          ? {
-              pakomCodes: nk0Mapping.pakomCodes,
-              updatesMap: nk0Mapping.updatesMap,
-              newHierarchyNodes: nk0Mapping.newHierarchyNodes,
-            }
-          : undefined,
-      nkUpdates: nkMapping?.updatesMap,
-      rhUpdates: rhMapping?.updatesMap,
-      logs,
-    });
+    setIsSaving(true);
+    setSaveErrorMsg(null);
+    setSaveSuccessMsg(null);
+    try {
+      const syncResult = await onApplyMonthlyUpload({
+        regionCode: targetRegion,
+        period,
+        nk0Update:
+          nk0Mapping && nk0Mapping.pakomCodes
+            ? {
+                pakomCodes: nk0Mapping.pakomCodes,
+                updatesMap: nk0Mapping.updatesMap,
+                newHierarchyNodes: nk0Mapping.newHierarchyNodes,
+                fileName: nk0Mapping.fileName,
+              }
+            : undefined,
+        nkUpdates: nkMapping?.updatesMap,
+        nkPrevPakomSync:
+          !nk0Mapping && nkMapping?.pakomCodes && nkMapping?.derivedNk0Map
+            ? {
+                pakomCodes: nkMapping.pakomCodes,
+                derivedNk0Map: nkMapping.derivedNk0Map,
+                newHierarchyNodes: nkMapping.newHierarchyNodes,
+                fileName: nkMapping.fileName,
+              }
+            : undefined,
+        rhUpdates: rhMapping?.updatesMap,
+        logs,
+      });
 
-    setSaveSuccessMsg(
-      isProvinsi
-        ? `Berhasil memperbarui data ${targetRegion} (${formatPeriodLabel({
-            month: targetMonth,
-            year: targetYear,
-          })}) dan menghitung ulang agregasi Provinsi Kalimantan Barat (6100).`
-        : `Berhasil memperbarui data ${targetRegion} (${formatPeriodLabel({
-            month: targetMonth,
-            year: targetYear,
-          })}).`
-    );
-    setNk0Mapping(null);
-    setNkMapping(null);
-    setRhMapping(null);
+      const syncSuffix = syncResult.syncedToSupabase
+        ? ` Tersinkron ke Supabase (${syncResult.savedRows} baris inflasi_lk_data & inflasi_upload_logs).`
+        : syncResult.error
+        ? ` Tersimpan lokal (Supabase gagal: ${syncResult.error}).`
+        : ' Tersimpan pada Mode Lokal.';
+
+      setSaveSuccessMsg(
+        `Berhasil memperbarui data ${targetRegion} (${targetMeta.shortName}) untuk periode ${formatPeriodLabel(
+          period
+        )} dan menghitung ulang agregasi Provinsi Kalimantan Barat (6100).${syncSuffix}`
+      );
+      setNk0Mapping(null);
+      setNkMapping(null);
+      setRhMapping(null);
+    } catch (err) {
+      setSaveErrorMsg(err instanceof Error ? err.message : 'Gagal menyimpan pembaruan data.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleRollover = async (regionsToRoll: KabKotaCode[]) => {
+    setIsRollingOver(true);
+    setSaveErrorMsg(null);
+    setSaveSuccessMsg(null);
+    try {
+      const res = await onRolloverPrevMonth(regionsToRoll);
+      setSaveSuccessMsg(
+        `Berhasil menarik ${res.totalRolledRows} baris NK(N) = NK(N-1) × RH(N)/100 dari periode ${formatPeriodLabel(
+          res.prevPeriod
+        )} menjadi nk_n1 pada periode ${formatPeriodLabel(period)} di Supabase.`
+      );
+    } catch (err) {
+      setSaveErrorMsg(err instanceof Error ? err.message : 'Gagal menarik data periode sebelumnya.');
+    } finally {
+      setIsRollingOver(false);
+    }
   };
 
   const handleReplaceEmptyRhWith100 = () => {
@@ -344,110 +462,157 @@ export const UpdateDataView: React.FC<UpdateDataViewProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* Step 1: Target Region & Period Selector */}
-      <section className="rounded-lg border border-slate-200 bg-white p-5">
-        <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
+      {/* Step 1: Synchronized Context Banner + 5 Kab/Kota NK0 Status Strip */}
+      <section className="rounded-lg border border-slate-200 bg-white p-5 space-y-4">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
             <p className="text-xs font-mono font-semibold uppercase tracking-wider text-sky-700">
-              PEMBARUAN PAKOM, NK0, NK & RH BULANAN
+              PEMBARUAN BULANAN NK & RH · PAKOM NK0 TERSIMPAN PER WILAYAH
             </p>
-            <h2 className="mt-1 text-lg font-bold text-slate-900">
-              Update Data Kab/Kota ({targetRegion})
+            <h2 className="mt-1 text-lg font-extrabold tracking-tight text-slate-900">
+              Update Data — {targetRegion} {targetMeta.name} ({formatPeriodLabel(period)})
             </h2>
             <p className="mt-0.5 text-xs text-slate-500">
-              Unggah file <strong>NK0=SBH2022</strong> untuk memperbarui paket komoditas (pakom) & bobot dasar wilayah, serta file <strong>NK (N-1)</strong> dan <strong>RH (N)</strong> bulanan.
-            </p>
-            <p className="mt-1.5 text-xs font-mono text-slate-700">
-              Pakom Aktif {targetRegion}: <strong>{currentPakomCount} komoditas</strong> · Total NK0:{' '}
-              <strong>{formatNKCompact(results[targetRegion].umum.nk0)}</strong>
+              Target wilayah dan periode mengikuti filter tunggal di bilah atas. <strong>NK0 (Pakom Wilayah)</strong> tersimpan permanen di browser untuk seluruh 5 Kab/Kota; pembaruan bulanan cukup mengunggah <strong>NK ({prevMonthLabel})</strong> dan <strong>RH ({currMonthLabel})</strong>.
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-3 shrink-0">
-            <div>
-              <label
-                htmlFor="upd-region"
-                className="block text-[11px] font-semibold uppercase text-slate-500 mb-1"
-              >
-                Wilayah Kab/Kota Target
-              </label>
-              <select
-                id="upd-region"
-                value={targetRegion}
-                disabled={!isProvinsi}
-                onChange={(e) => {
-                  setTargetRegion(e.target.value as KabKotaCode);
-                  setNk0Mapping(null);
-                  setNkMapping(null);
-                  setRhMapping(null);
-                  setSaveSuccessMsg(null);
-                }}
-                className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-900 focus:border-slate-900 focus:outline-none disabled:bg-slate-100"
-              >
-                {kabKotaList.map((r) => (
-                  <option key={r.code} value={r.code}>
-                    {r.code} — {r.name}
-                  </option>
-                ))}
-              </select>
+          <div className="shrink-0 rounded-md border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs font-mono">
+            <div className="text-slate-500">Pakom Aktif ({targetRegion})</div>
+            <div className="mt-0.5 font-bold text-slate-900">
+              {currentPakomCount} komoditas · NK0 {formatNKCompact(results[targetRegion].umum.nk0)}
             </div>
-
-            <div>
-              <label
-                htmlFor="upd-month"
-                className="block text-[11px] font-semibold uppercase text-slate-500 mb-1"
-              >
-                Bulan Berjalan (N)
-              </label>
-              <select
-                id="upd-month"
-                value={targetMonth}
-                onChange={(e) => setTargetMonth(Number(e.target.value))}
-                className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-900 focus:border-sky-600 focus:outline-none"
-              >
-                {BULAN_OPTIONS.map((b) => (
-                  <option key={b.value} value={b.value}>
-                    {b.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label
-                htmlFor="upd-year"
-                className="block text-[11px] font-semibold uppercase text-slate-500 mb-1"
-              >
-                Tahun
-              </label>
-              <input
-                id="upd-year"
-                type="number"
-                min={2020}
-                max={2035}
-                value={targetYear}
-                onChange={(e) => setTargetYear(Number(e.target.value) || 2025)}
-                className="w-24 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-mono font-medium text-slate-900 focus:border-sky-600 focus:outline-none"
-              />
+            <div
+              className={`mt-0.5 text-[11px] font-semibold ${
+                currentNk0Meta?.isCustom ? 'text-emerald-700' : 'text-amber-700'
+              }`}
+            >
+              {currentNk0Meta?.isCustom
+                ? `NK0 Tersimpan (${currentNk0Meta.fileName})`
+                : 'Belum upload NK0 wilayah ini'}
             </div>
           </div>
         </div>
 
+        {/* 5 Kab/Kota Status Selector Strip (syncs directly with the single top filter) */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5 pt-2 border-t border-slate-100">
+          {kabKotaList.map((reg) => {
+            const kCode = reg.code as KabKotaCode;
+            const isSelected = targetRegion === kCode;
+            const meta = nk0Meta[kCode];
+            const res = results[kCode];
+            return (
+              <button
+                key={kCode}
+                type="button"
+                onClick={() => onSelectRegion(kCode)}
+                className={`text-left rounded-md border p-3 transition-colors ${
+                  isSelected
+                    ? 'border-slate-900 bg-slate-900 text-white'
+                    : 'border-slate-200 bg-white text-slate-900 hover:border-slate-400'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span
+                    className={`font-mono text-xs font-bold ${
+                      isSelected ? 'text-sky-300' : 'text-slate-500'
+                    }`}
+                  >
+                    {kCode}
+                  </span>
+                  <span
+                    className={`font-mono text-xs font-bold tabular-nums ${
+                      isSelected
+                        ? res.umum.inflasi >= 0
+                          ? 'text-rose-300'
+                          : 'text-emerald-300'
+                        : res.umum.inflasi > 0.0005
+                        ? 'text-rose-700'
+                        : res.umum.inflasi < -0.0005
+                        ? 'text-emerald-700'
+                        : 'text-slate-600'
+                    }`}
+                  >
+                    {formatSignedPct(res.umum.inflasi, 2)}
+                  </span>
+                </div>
+                <div className="mt-0.5 text-xs font-bold truncate">{reg.shortName}</div>
+                <div
+                  className={`mt-1 text-[11px] font-mono ${
+                    isSelected
+                      ? 'text-slate-300'
+                      : meta?.isCustom
+                      ? 'text-emerald-700'
+                      : 'text-amber-700'
+                  }`}
+                >
+                  {res.pakomCount} kom · {meta?.isCustom ? 'NK0 Tersimpan' : 'Baseline Awal'}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Rollover Antarbulan Bar */}
+        <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3">
+          <div className="text-xs text-slate-600">
+            <span className="font-semibold text-slate-800">Rollover Antarbulan Supabase:</span>{' '}
+            <span>
+              Hitung <span className="font-mono">NK(N) = NK(N-1) × RH(N)/100</span> dari{' '}
+              <strong>{prevMonthLabel}</strong> menjadi <strong>NK (N-1)</strong> periode{' '}
+              <strong>{formatPeriodLabel(period)}</strong>.
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <button
+              type="button"
+              disabled={isRollingOver || connectionStatus === 'local'}
+              onClick={() => void handleRollover([targetRegion])}
+              title={
+                connectionStatus === 'local'
+                  ? 'Membutuhkan koneksi Supabase aktif (VITE_SUPABASE_URL)'
+                  : `Tarik NK (N) bulan lalu ke NK (N-1) untuk ${targetRegion}`
+              }
+              className="inline-flex items-center gap-1.5 rounded-md border border-sky-300 bg-sky-50 px-3 py-1.5 text-xs font-bold text-sky-900 hover:bg-sky-100 disabled:opacity-50 whitespace-nowrap"
+            >
+              {isRollingOver ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="h-3.5 w-3.5" />
+              )}
+              <span>Tarik NK (N) Bulan Lalu → NK (N-1)</span>
+            </button>
+            <button
+              type="button"
+              disabled={isRollingOver || connectionStatus === 'local'}
+              onClick={() => void handleRollover(KAB_KOTA_CODES)}
+              className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 hover:bg-slate-50 disabled:opacity-50 whitespace-nowrap"
+            >
+              <span>Rollover Semua 5 Kab/Kota</span>
+            </button>
+          </div>
+        </div>
+
+        {saveErrorMsg && (
+          <div className="rounded-md border border-rose-200 bg-rose-50 px-4 py-3 flex items-center gap-2 text-xs text-rose-900">
+            <AlertTriangle className="h-4 w-4 text-rose-600 shrink-0" />
+            <span>{saveErrorMsg}</span>
+          </div>
+        )}
+
         {saveSuccessMsg && (
-          <div className="mt-4 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+          <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2 text-xs text-emerald-900 font-medium">
               <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
               <span>{saveSuccessMsg}</span>
             </div>
             <div className="flex items-center gap-3 text-xs font-mono">
               <span>
-                {targetRegion}: <strong>{formatSignedPct(results[targetRegion].umum.inflasi, 3)}</strong>
+                {targetRegion}: <strong>{formatSignedPct(results[targetRegion].umum.inflasi, 2)}</strong>
               </span>
-              {isProvinsi && (
-                <span>
-                  6100 Kalbar: <strong>{formatSignedPct(results['6100'].umum.inflasi, 3)}</strong>
-                </span>
-              )}
+              <span>
+                6100 Kalbar: <strong>{formatSignedPct(results['6100'].umum.inflasi, 2)}</strong>
+              </span>
               <button
                 type="button"
                 onClick={() => onNavigateToLK(targetRegion)}
@@ -468,15 +633,14 @@ export const UpdateDataView: React.FC<UpdateDataViewProps> = ({
             <div className="flex items-start justify-between gap-2">
               <div>
                 <span className="text-[11px] font-mono font-semibold text-indigo-700">
-                  FILE 1 · PAKOM & NK0=SBH2022
+                  MASTER WILAYAH · NK0=SBH2022
                 </span>
                 <h3 className="text-sm font-bold text-slate-900 mt-0.5">
-                  Upload File NK0 (Pakom Wilayah)
+                  Pakom & NK0 ({targetMeta.shortName})
                 </h3>
                 <p className="text-xs text-slate-500 mt-1">
-                  Membaca kolom <code className="font-mono bg-slate-100 px-1 rounded">Kel</code>,{' '}
-                  <code className="font-mono bg-slate-100 px-1 rounded">IN=3</code>, dan{' '}
-                  <code className="font-mono bg-slate-100 px-1 rounded">NK0=SBH2022</code> untuk memperbarui daftar pakom & bobot dasar {targetRegion}.
+                  Cukup diunggah sekali saat setup/perubahan Pakom. Tersimpan permanen untuk{' '}
+                  <strong>{targetRegion}</strong> meskipun bulan berganti.
                 </p>
               </div>
               <Layers className="h-5 w-5 text-indigo-600 shrink-0" />
@@ -485,10 +649,10 @@ export const UpdateDataView: React.FC<UpdateDataViewProps> = ({
             <label className="mt-4 flex flex-col items-center justify-center rounded-md border border-dashed border-slate-300 bg-slate-50/60 px-4 py-5 text-center cursor-pointer hover:border-indigo-500 hover:bg-indigo-50/40 transition-colors">
               <Upload className="h-5 w-5 text-slate-400 mb-1.5" />
               <span className="text-xs font-semibold text-slate-800">
-                Pilih file .xlsx / .csv (Template NK0)
+                Upload / Perbarui File NK0 ({targetRegion})
               </span>
               <span className="text-[11px] text-slate-500 mt-0.5">
-                Menambah komoditas baru & menonaktifkan di luar pakom
+                Mendukung file per kota maupun multi-wilayah (auto-filter {targetRegion})
               </span>
               <input
                 type="file"
@@ -533,24 +697,21 @@ export const UpdateDataView: React.FC<UpdateDataViewProps> = ({
           <div className="mt-4 pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
             <button
               type="button"
-              onClick={() =>
-                exportUploadTemplateWorkbook('NK0', results[targetRegion], {
-                  month: targetMonth,
-                  year: targetYear,
-                })
-              }
+              onClick={() => exportUploadTemplateWorkbook('NK0', results[targetRegion], period)}
               className="inline-flex items-center gap-1.5 rounded-md border border-indigo-300 bg-indigo-50 px-2.5 py-1 text-xs font-bold text-indigo-900 hover:bg-indigo-100 transition-colors"
             >
               <Download className="h-3.5 w-3.5" />
-              <span>Download Template NK0</span>
+              <span>Template NK0</span>
             </button>
-            <button
-              type="button"
-              onClick={() => void handleLoadSample('NK0')}
-              className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
-            >
-              Muat Contoh Sintang
-            </button>
+            {targetRegion === '6107' && (
+              <button
+                type="button"
+                onClick={() => void handleLoadSample('NK0')}
+                className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+              >
+                Muat Contoh 6107
+              </button>
+            )}
           </div>
         </div>
 
@@ -560,13 +721,14 @@ export const UpdateDataView: React.FC<UpdateDataViewProps> = ({
             <div className="flex items-start justify-between gap-2">
               <div>
                 <span className="text-[11px] font-mono font-semibold text-sky-700">
-                  FILE 2 · KOLOM NK (N-1)
+                  UPDATE BULANAN 1 · NK ({prevMonthLabel.toUpperCase()})
                 </span>
                 <h3 className="text-sm font-bold text-slate-900 mt-0.5">
-                  Upload File NK Bulan Sebelumnya
+                  Upload NK Bulan Sebelumnya ({targetMeta.shortName})
                 </h3>
                 <p className="text-xs text-slate-500 mt-1">
-                  Membaca kolom <code className="font-mono bg-slate-100 px-1 rounded">NK</code> (Flag 3) untuk memperbarui kolom <strong>NK (N-1)</strong> sesuai pakom {targetRegion}.
+                  Membaca kolom <code className="font-mono bg-slate-100 px-1 rounded">NK</code> (termasuk NK {prevMonthLabel} / NK N-1). Otomatis menyaring baris{' '}
+                  <strong>{targetRegion}</strong> jika ada kolom Kode Kota.
                 </p>
               </div>
               <FileSpreadsheet className="h-5 w-5 text-sky-600 shrink-0" />
@@ -575,10 +737,10 @@ export const UpdateDataView: React.FC<UpdateDataViewProps> = ({
             <label className="mt-4 flex flex-col items-center justify-center rounded-md border border-dashed border-slate-300 bg-slate-50/60 px-4 py-5 text-center cursor-pointer hover:border-sky-500 hover:bg-sky-50/40 transition-colors">
               <Upload className="h-5 w-5 text-slate-400 mb-1.5" />
               <span className="text-xs font-semibold text-slate-800">
-                Pilih file .xlsx / .csv (Indeks Jejer / NK)
+                Pilih file .xlsx / .csv (NK {prevMonthLabel})
               </span>
               <span className="text-[11px] text-slate-500 mt-0.5">
-                Mendukung pemisah titik koma (;) & koma (,)
+                Mendukung pemisah titik koma (;), koma (,), & multi-wilayah
               </span>
               <input
                 type="file"
@@ -590,6 +752,18 @@ export const UpdateDataView: React.FC<UpdateDataViewProps> = ({
                   e.target.value = '';
                 }}
               />
+            </label>
+
+            <label className="mt-3 inline-flex items-start gap-2 text-[11px] font-medium text-slate-700 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={syncPakomFromNk}
+                onChange={(e) => setSyncPakomFromNk(e.target.checked)}
+                className="mt-0.5 rounded border-slate-300"
+              />
+              <span>
+                Sinkronkan Pakom dari file NK ini (pakai NK0 tersimpan, atau hitung NK0=NK/IHK jika belum ada)
+              </span>
             </label>
 
             {nkError && (
@@ -604,8 +778,9 @@ export const UpdateDataView: React.FC<UpdateDataViewProps> = ({
                 <div className="min-w-0">
                   <p className="font-semibold truncate">{nkMapping.fileName}</p>
                   <p className="text-[11px] text-slate-600 font-mono mt-0.5">
-                    Cocok: <strong>{nkMapping.matchedCount}</strong> · Unmatched:{' '}
-                    <strong>{nkMapping.unmatchedCount}</strong>
+                    Cocok: <strong>{nkMapping.matchedCount}</strong>
+                    {nkMapping.filteredRegionCode && ` · Filter ${nkMapping.filteredRegionCode}`} ·
+                    Unmatched: <strong>{nkMapping.unmatchedCount}</strong>
                   </p>
                 </div>
                 <button
@@ -622,24 +797,21 @@ export const UpdateDataView: React.FC<UpdateDataViewProps> = ({
           <div className="mt-4 pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
             <button
               type="button"
-              onClick={() =>
-                exportUploadTemplateWorkbook('NK_PREV', results[targetRegion], {
-                  month: targetMonth,
-                  year: targetYear,
-                })
-              }
+              onClick={() => exportUploadTemplateWorkbook('NK_PREV', results[targetRegion], period)}
               className="inline-flex items-center gap-1.5 rounded-md border border-sky-300 bg-sky-50 px-2.5 py-1 text-xs font-bold text-sky-900 hover:bg-sky-100 transition-colors"
             >
               <Download className="h-3.5 w-3.5" />
-              <span>Download Template NK</span>
+              <span>Template NK</span>
             </button>
-            <button
-              type="button"
-              onClick={() => void handleLoadSample('NK_PREV')}
-              className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
-            >
-              Muat Contoh Sintang
-            </button>
+            {targetRegion === '6107' && (
+              <button
+                type="button"
+                onClick={() => void handleLoadSample('NK_PREV')}
+                className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+              >
+                Muat Contoh 6107
+              </button>
+            )}
           </div>
         </div>
 
@@ -649,13 +821,13 @@ export const UpdateDataView: React.FC<UpdateDataViewProps> = ({
             <div className="flex items-start justify-between gap-2">
               <div>
                 <span className="text-[11px] font-mono font-semibold text-amber-700">
-                  FILE 3 · KOLOM RH (N)
+                  UPDATE BULANAN 2 · RH ({currMonthLabel.toUpperCase()})
                 </span>
                 <h3 className="text-sm font-bold text-slate-900 mt-0.5">
-                  Upload File RH Bulan Berjalan
+                  Upload RH Bulan Berjalan ({targetMeta.shortName})
                 </h3>
                 <p className="text-xs text-slate-500 mt-1">
-                  Membaca kolom <code className="font-mono bg-slate-100 px-1 rounded">RH</code> untuk memperbarui <strong>RH (N)</strong> dan menghitung ulang inflasi {targetRegion}.
+                  Membaca kolom <code className="font-mono bg-slate-100 px-1 rounded">RH</code> (termasuk RH {currMonthLabel} / RH N) dan menghitung ulang inflasi & andil {targetRegion}.
                 </p>
               </div>
               <FileSpreadsheet className="h-5 w-5 text-amber-600 shrink-0" />
@@ -664,10 +836,10 @@ export const UpdateDataView: React.FC<UpdateDataViewProps> = ({
             <label className="mt-4 flex flex-col items-center justify-center rounded-md border border-dashed border-slate-300 bg-slate-50/60 px-4 py-5 text-center cursor-pointer hover:border-amber-500 hover:bg-amber-50/40 transition-colors">
               <Upload className="h-5 w-5 text-slate-400 mb-1.5" />
               <span className="text-xs font-semibold text-slate-800">
-                Pilih file .xlsx / .csv (Tabel RH Komoditas)
+                Pilih file .xlsx / .csv (RH {currMonthLabel})
               </span>
               <span className="text-[11px] text-slate-500 mt-0.5">
-                Normalisasi otomatis kode 6-digit & 7-digit
+                Normalisasi kode 6/7-digit & filter wilayah {targetRegion}
               </span>
               <input
                 type="file"
@@ -697,7 +869,7 @@ export const UpdateDataView: React.FC<UpdateDataViewProps> = ({
                     {(rhMapping.replacedEmptyCount ?? 0) > 0 && (
                       <>
                         {' '}
-                        · <strong>{rhMapping.replacedEmptyCount}</strong> kosong→100
+                        · <strong>{rhMapping.replacedEmptyCount}</strong> → 100
                       </>
                     )}{' '}
                     · Unmatched: <strong>{rhMapping.unmatchedCount}</strong>
@@ -713,48 +885,57 @@ export const UpdateDataView: React.FC<UpdateDataViewProps> = ({
               </div>
             )}
 
-            <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-              <label className="inline-flex items-center gap-1.5 text-[11px] font-medium text-slate-700 cursor-pointer">
+            <div className="mt-3 space-y-1.5">
+              <label className="flex items-center gap-1.5 text-[11px] font-medium text-slate-700 cursor-pointer">
                 <input
                   type="checkbox"
                   checked={fillEmptyRhWith100}
                   onChange={(e) => setFillEmptyRhWith100(e.target.checked)}
                   className="rounded border-slate-300"
                 />
-                <span>Otomatis isi RH kosong/0 = 100</span>
+                <span>Otomatis isi sel RH kosong/0 = 100</span>
               </label>
 
-              <button
-                type="button"
-                onClick={handleReplaceEmptyRhWith100}
-                className="rounded border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] font-bold text-amber-900 hover:bg-amber-100 transition-colors"
-              >
-                Replace Kosong → 100
-              </button>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <label className="flex items-center gap-1.5 text-[11px] font-medium text-slate-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={resetUnlistedRhTo100}
+                    onChange={(e) => setResetUnlistedRhTo100(e.target.checked)}
+                    className="rounded border-slate-300"
+                  />
+                  <span>Reset Pakom di luar file RH = 100</span>
+                </label>
+
+                <button
+                  type="button"
+                  onClick={handleReplaceEmptyRhWith100}
+                  className="rounded border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] font-bold text-amber-900 hover:bg-amber-100 transition-colors"
+                >
+                  Replace Kosong → 100
+                </button>
+              </div>
             </div>
           </div>
 
           <div className="mt-4 pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
             <button
               type="button"
-              onClick={() =>
-                exportUploadTemplateWorkbook('RH_CURRENT', results[targetRegion], {
-                  month: targetMonth,
-                  year: targetYear,
-                })
-              }
+              onClick={() => exportUploadTemplateWorkbook('RH_CURRENT', results[targetRegion], period)}
               className="inline-flex items-center gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1 text-xs font-bold text-amber-900 hover:bg-amber-100 transition-colors"
             >
               <Download className="h-3.5 w-3.5" />
-              <span>Download Template RH</span>
+              <span>Template RH</span>
             </button>
-            <button
-              type="button"
-              onClick={() => void handleLoadSample('RH_CURRENT')}
-              className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
-            >
-              Muat Contoh Sintang
-            </button>
+            {targetRegion === '6107' && (
+              <button
+                type="button"
+                onClick={() => void handleLoadSample('RH_CURRENT')}
+                className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+              >
+                Muat Contoh 6107
+              </button>
+            )}
           </div>
         </div>
       </section>
@@ -765,10 +946,10 @@ export const UpdateDataView: React.FC<UpdateDataViewProps> = ({
           <div className="px-5 py-4 border-b border-slate-200 bg-slate-50 flex flex-wrap items-center justify-between gap-4">
             <div>
               <h3 className="text-sm font-bold text-slate-900">
-                Pratinjau & Validasi Hasil Mapping ({targetRegion})
+                Pratinjau & Validasi Hasil Mapping ({targetRegion} — {targetMeta.shortName})
               </h3>
               <p className="text-xs text-slate-500 mt-0.5">
-                Periksa perubahan pakom / NK0 / NK / RH sebelum menyimpan dan menghitung ulang Provinsi Kalimantan Barat (6100).
+                Periksa perubahan untuk periode <strong>{formatPeriodLabel(period)}</strong> sebelum menyimpan dan menghitung ulang Provinsi Kalimantan Barat (6100).
               </p>
             </div>
 
@@ -823,11 +1004,16 @@ export const UpdateDataView: React.FC<UpdateDataViewProps> = ({
               )}
               <button
                 type="button"
-                onClick={handleSaveUpdates}
-                className="inline-flex items-center gap-1.5 rounded-md bg-sky-700 px-4 py-1.5 text-xs font-semibold text-white hover:bg-sky-800 transition-colors"
+                disabled={isSaving}
+                onClick={() => void handleSaveUpdates()}
+                className="inline-flex items-center gap-1.5 rounded-md bg-sky-700 px-4 py-1.5 text-xs font-semibold text-white hover:bg-sky-800 disabled:opacity-60 transition-colors"
               >
-                <Save className="h-3.5 w-3.5" />
-                <span>Simpan & Hitung Ulang LK</span>
+                {isSaving ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Save className="h-3.5 w-3.5" />
+                )}
+                <span>{isSaving ? 'Menyimpan...' : 'Simpan & Hitung Ulang LK'}</span>
               </button>
             </div>
           </div>
@@ -845,11 +1031,14 @@ export const UpdateDataView: React.FC<UpdateDataViewProps> = ({
                   <span className="text-[11px] text-slate-500 block">Total Baris Komoditas</span>
                   <span className="text-sm font-mono font-bold text-slate-900">
                     {activeMapping.totalParsedRows}
+                    {activeMapping.filteredRegionCode ? ` (${activeMapping.filteredRegionCode})` : ''}
                   </span>
                 </div>
                 <div className="rounded-md border border-emerald-200 bg-emerald-50/50 p-3">
                   <span className="text-[11px] text-emerald-700 block">
-                    {activeMapping.kind === 'NK0' ? 'Komoditas Pakom Baru' : 'Berhasil Di-mapping'}
+                    {activeMapping.kind === 'NK0' || activeMapping.pakomCodes
+                      ? 'Komoditas Pakom'
+                      : 'Berhasil Di-mapping'}
                   </span>
                   <span className="text-sm font-mono font-bold text-emerald-800">
                     {activeMapping.matchedCount} komoditas
@@ -857,10 +1046,12 @@ export const UpdateDataView: React.FC<UpdateDataViewProps> = ({
                 </div>
                 <div className="rounded-md border border-slate-200 p-3">
                   <span className="text-[11px] text-slate-500 block">
-                    {activeMapping.kind === 'NK0' ? 'Perubahan Pakom' : 'Tidak Cocok (Unmatched)'}
+                    {activeMapping.kind === 'NK0' || activeMapping.pakomCodes
+                      ? 'Perubahan Pakom'
+                      : 'Tidak Cocok (Unmatched)'}
                   </span>
                   <span className="text-sm font-mono font-bold text-slate-800">
-                    {activeMapping.kind === 'NK0'
+                    {activeMapping.kind === 'NK0' || activeMapping.pakomCodes
                       ? `+${activeMapping.addedToPakomCount ?? 0} / -${activeMapping.removedFromPakomCount ?? 0}`
                       : `${activeMapping.unmatchedCount} baris`}
                   </span>
@@ -1033,34 +1224,48 @@ export const UpdateDataView: React.FC<UpdateDataViewProps> = ({
         <div className="px-5 py-3 border-b border-slate-200 flex items-center justify-between">
           <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
             <History className="h-3.5 w-3.5 text-slate-500" />
-            <span>Riwayat Pembaruan Database Lokal</span>
+            <span>
+              Riwayat Pembaruan Database {connectionStatus === 'local' ? 'Lokal' : 'Supabase'}
+            </span>
           </h3>
-          <span className="text-[11px] font-mono text-slate-500">{visibleHistory.length} entri</span>
+          <span className="text-[11px] font-mono text-slate-500">{history.length} entri</span>
         </div>
-        {visibleHistory.length === 0 ? (
+        {history.length === 0 ? (
           <div className="p-6 text-center text-xs text-slate-500">
-            Belum ada unggahan pembaruan pada sesi ini. Unggah file NK0/NK/RH di atas atau muat template contoh Sintang.
+            Belum ada unggahan pembaruan pada periode ini. Unggah file NK0/NK/RH di atas sesuai wilayah pada filter atas.
           </div>
         ) : (
           <div className="divide-y divide-slate-100 text-xs">
-            {visibleHistory.map((h) => (
-              <div key={h.id} className="px-5 py-2.5 flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-3">
-                  <span className="font-mono font-semibold text-slate-900">{h.regionCode}</span>
-                  <span className="font-mono text-[11px] text-slate-600">
-                    {h.kind === 'NK0' ? 'NK0 & Pakom' : h.kind === 'NK_PREV' ? 'NK (N-1)' : 'RH (N)'}
-                  </span>
-                  <span className="font-medium text-slate-800">{h.fileName}</span>
+            {history.map((h) => {
+              const kindLabel =
+                h.kind === 'NK0'
+                  ? 'NK0 & Pakom'
+                  : h.kind === 'NK_PREV'
+                  ? 'NK (N-1)'
+                  : h.kind === 'RH_CURRENT'
+                  ? 'RH (N)'
+                  : h.kind === 'ROLLOVER'
+                  ? 'Rollover'
+                  : h.kind === 'RESPONDEN_SYNC'
+                  ? 'Sync Responden'
+                  : 'Edit Inline';
+              return (
+                <div key={h.id} className="px-5 py-2.5 flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-3">
+                    <span className="font-mono font-semibold text-slate-900">{h.regionCode}</span>
+                    <span className="font-mono text-[11px] text-slate-600">{kindLabel}</span>
+                    <span className="font-medium text-slate-800">{h.fileName}</span>
+                  </div>
+                  <div className="flex items-center gap-4 font-mono text-[11px] text-slate-600">
+                    <span>{formatPeriodLabel(h.period)}</span>
+                    <span className="text-emerald-700">{h.matchedCount} matched</span>
+                    {h.unmatchedCount > 0 && (
+                      <span className="text-amber-700">{h.unmatchedCount} unmatched</span>
+                    )}
+                  </div>
                 </div>
-                <div className="flex items-center gap-4 font-mono text-[11px] text-slate-600">
-                  <span>{formatPeriodLabel(h.period)}</span>
-                  <span className="text-emerald-700">{h.matchedCount} matched</span>
-                  {h.unmatchedCount > 0 && (
-                    <span className="text-amber-700">{h.unmatchedCount} unmatched</span>
-                  )}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </section>
