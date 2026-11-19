@@ -1,0 +1,6 @@
+{
+  "name": "Monitoring Inflasi IHK Kalbar (6100)",
+  "description": "Aplikasi penghitungan, pembaruan bulanan, dan monitoring inflasi Indeks Harga Konsumen (IHK) 5 Kabupaten/Kota serta agregasi Provinsi Kalimantan Barat (Kode 6100).",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
