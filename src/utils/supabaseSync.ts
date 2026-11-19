@@ -1,7 +1,9 @@
 import { supabase } from '../lib/supabase';
-import { KAB_KOTA_CODES } from '../data/regions';
+import { getRegionInfo, KAB_KOTA_CODES } from '../data/regions';
+import { HIERARCHY_NODES } from '../data/masterHierarchy';
 import type {
   CommodityInputRow,
+  HierarchyNodeMeta,
   KabKotaCode,
   PeriodSelection,
   RespondentFrequency,
@@ -16,56 +18,63 @@ export interface SupabaseLKRow {
   tahun: number;
   bulan: number;
   kode_wilayah: string;
+  nama_wilayah: string;
+  kode_kelompok: string;
   kode_komoditas: string;
-  nk0: number;
+  nama_komoditas: string;
+  bobot: number;
+  nk_dasar: number;
   nk_n1: number;
   rh_n: number;
 }
 
-interface RawSupabaseLKRow extends SupabaseLKRow {
+interface RawSupabaseLKRow {
+  tahun: number;
+  bulan: number;
+  kode_wilayah: string;
+  nama_wilayah?: string | null;
+  kode_kelompok?: string | null;
+  kode_komoditas: string;
   nama_komoditas?: string | null;
+  bobot?: number | null;
+  nk_dasar: number;
+  nk_n1: number;
+  rh_n: number;
 }
 
 interface RawSupabaseUploadLogRow {
   id?: string | number;
   tahun: number;
   bulan: number;
-  kode_wilayah: string;
   jenis_upload: string;
   nama_file: string;
-  matched_count: number;
-  unmatched_count: number;
+  jumlah_baris: number;
   created_at?: string;
 }
 
 interface RawSupabaseRespondentRow {
+  id?: string;
   tahun: number;
   bulan: number;
   kode_wilayah: string;
-  frekuensi: RespondentFrequency;
-  obs_key: string;
   kode_komoditas: string;
-  komoditas: string;
-  kode_kualitas: string;
-  bobot_kualitas: number;
-  kualitas: string;
-  bobot_jenis_pasar: number;
-  jenis_pasar: string;
-  bobot_pasar: number;
-  pasar: string;
+  kode_responden: string;
   nama_responden: string;
-  prev_prices: (number | null)[];
-  curr_prices: (number | null)[];
-  prev_avg_price: number | null;
-  curr_avg_price: number | null;
-  price_relative: number | null;
-  file_name: string | null;
+  kualitas: string;
+  frekuensi: string;
+  harga_lalu: number | null;
+  harga_berjalan: number | null;
+  rh_responden: number | null;
   updated_at?: string;
 }
 
 const BATCH_SIZE = 500;
 const PAGE_SIZE = 1000;
 const KABKOTA_SET = new Set<string>(KAB_KOTA_CODES);
+
+const DEFAULT_NODE_NAMES = new Map<string, string>(
+  HIERARCHY_NODES.filter((n) => n.flag === 3).map((n) => [n.kode, n.nama])
+);
 
 function isKabKotaCode(code: string): code is KabKotaCode {
   return KABKOTA_SET.has(code);
@@ -95,7 +104,7 @@ export async function fetchPeriodLKFromSupabase(period: PeriodSelection): Promis
   while (true) {
     const { data, error } = await supabase
       .from('inflasi_lk_data')
-      .select('tahun,bulan,kode_wilayah,kode_komoditas,nk0,nk_n1,rh_n')
+      .select('tahun,bulan,kode_wilayah,kode_komoditas,nama_komoditas,nk_dasar,nk_n1,rh_n')
       .eq('tahun', period.year)
       .eq('bulan', period.month)
       .in('kode_wilayah', KAB_KOTA_CODES)
@@ -127,7 +136,7 @@ export async function fetchPeriodLKFromSupabase(period: PeriodSelection): Promis
       byRegion[regionCode] = {};
     }
 
-    const nk0 = Number(row.nk0);
+    const nk0 = Number(row.nk_dasar);
     const nkPrev = Number(row.nk_n1);
     const rhCurrent = Number(row.rh_n);
 
@@ -147,7 +156,7 @@ export async function fetchPeriodLKFromSupabase(period: PeriodSelection): Promis
 }
 
 /**
- * Tarik Pakom & NK0 terbaru dari periode sebelumnya di Supabase bagi Kab/Kota
+ * Tarik Pakom & NK0 (nk_dasar) terbaru dari periode lain di Supabase bagi Kab/Kota
  * yang belum memiliki entri pada periode aktif (agar NK0 selalu tersimpan lintas bulan).
  */
 export async function fetchLatestNk0BaselineForRegions(
@@ -176,7 +185,7 @@ export async function fetchLatestNk0BaselineForRegions(
     while (true) {
       const { data, error } = await supabase
         .from('inflasi_lk_data')
-        .select('kode_komoditas,nk0')
+        .select('kode_komoditas,nk_dasar')
         .eq('tahun', latestYear)
         .eq('bulan', latestMonth)
         .eq('kode_wilayah', regionCode)
@@ -194,7 +203,7 @@ export async function fetchLatestNk0BaselineForRegions(
       for (const r of rows) {
         const kode = normalizeKode7(r.kode_komoditas);
         if (!kode) continue;
-        const nk0 = Number(r.nk0);
+        const nk0 = Number(r.nk_dasar);
         const safeNk0 = Number.isFinite(nk0) ? nk0 : 0;
         map[kode] = {
           kode,
@@ -213,7 +222,7 @@ export async function fetchLatestNk0BaselineForRegions(
 export async function upsertLKRowsBatchToSupabase(rows: SupabaseLKRow[]): Promise<number> {
   if (!supabase || rows.length === 0) return 0;
 
-  // Deduplicate by composite conflict key to avoid PostgreSQL ON CONFLICT double-hit error
+  // Deduplikasi kunci komposit untuk mencegah error PostgreSQL ON CONFLICT double-hit
   const deduped = new Map<string, SupabaseLKRow>();
   for (const r of rows) {
     const key = `${r.tahun}|${r.bulan}|${r.kode_wilayah}|${r.kode_komoditas}`;
@@ -221,8 +230,12 @@ export async function upsertLKRowsBatchToSupabase(rows: SupabaseLKRow[]): Promis
       tahun: r.tahun,
       bulan: r.bulan,
       kode_wilayah: r.kode_wilayah,
+      nama_wilayah: r.nama_wilayah,
+      kode_kelompok: r.kode_kelompok,
       kode_komoditas: r.kode_komoditas,
-      nk0: Number.isFinite(r.nk0) ? r.nk0 : 0,
+      nama_komoditas: r.nama_komoditas,
+      bobot: Number.isFinite(r.bobot) ? r.bobot : 0,
+      nk_dasar: Number.isFinite(r.nk_dasar) ? r.nk_dasar : 0,
       nk_n1: Number.isFinite(r.nk_n1) ? r.nk_n1 : 0,
       rh_n: Number.isFinite(r.rh_n) && r.rh_n > 0 ? r.rh_n : 100,
     });
@@ -258,11 +271,9 @@ export async function insertUploadLogsToSupabase(
   const payload = entries.map((e) => ({
     tahun: e.period.year,
     bulan: e.period.month,
-    kode_wilayah: e.regionCode,
-    jenis_upload: e.kind,
+    jenis_upload: `${e.regionCode} · ${e.kind}`,
     nama_file: e.fileName,
-    matched_count: e.matchedCount,
-    unmatched_count: e.unmatchedCount,
+    jumlah_baris: e.matchedCount,
   }));
 
   const { error } = await supabase.from('inflasi_upload_logs').insert(payload);
@@ -278,7 +289,7 @@ export async function fetchUploadLogsFromSupabase(
 
   const { data, error } = await supabase
     .from('inflasi_upload_logs')
-    .select('id,tahun,bulan,kode_wilayah,jenis_upload,nama_file,matched_count,unmatched_count,created_at')
+    .select('id,tahun,bulan,jenis_upload,nama_file,jumlah_baris,created_at')
     .eq('tahun', period.year)
     .eq('bulan', period.month)
     .order('created_at', { ascending: false })
@@ -288,24 +299,37 @@ export async function fetchUploadLogsFromSupabase(
     throw new Error(error.message || 'Gagal memuat riwayat unggahan dari Supabase.');
   }
 
-  return ((data ?? []) as RawSupabaseUploadLogRow[])
-    .filter((r) => isKabKotaCode(String(r.kode_wilayah ?? '')))
-    .map((r, idx) => ({
+  return ((data ?? []) as RawSupabaseUploadLogRow[]).map((r, idx) => {
+    const rawJenis = String(r.jenis_upload ?? '');
+    const parts = rawJenis.split('·').map((s) => s.trim());
+    const maybeRegion = parts.length >= 2 && isKabKotaCode(parts[0]) ? (parts[0] as KabKotaCode) : '6107';
+    const maybeKind = (parts.length >= 2 ? parts[1] : parts[0]) as UpdateHistoryEntry['kind'];
+    const validKinds: UpdateHistoryEntry['kind'][] = [
+      'NK0',
+      'NK_PREV',
+      'RH_CURRENT',
+      'INLINE_EDIT',
+      'ROLLOVER',
+      'RESPONDEN_SYNC',
+    ];
+    return {
       id: String(r.id ?? `sb-${idx}`),
       timestamp: r.created_at ?? new Date().toISOString(),
-      regionCode: r.kode_wilayah as KabKotaCode,
+      regionCode: maybeRegion,
       period: { year: Number(r.tahun), month: Number(r.bulan) },
-      kind: (r.jenis_upload as UpdateHistoryEntry['kind']) ?? 'NK_PREV',
+      kind: validKinds.includes(maybeKind) ? maybeKind : 'NK_PREV',
       fileName: r.nama_file,
-      matchedCount: Number(r.matched_count ?? 0),
-      unmatchedCount: Number(r.unmatched_count ?? 0),
-    }));
+      matchedCount: Number(r.jumlah_baris ?? 0),
+      unmatchedCount: 0,
+    };
+  });
 }
 
 export async function rolloverPrevMonthFromSupabase(params: {
   targetPeriod: PeriodSelection;
   targetRegions: KabKotaCode[];
   currentInputs: Record<KabKotaCode, Record<string, CommodityInputRow>>;
+  customNodes?: Record<string, HierarchyNodeMeta>;
 }): Promise<{
   updatedRegions: Partial<Record<KabKotaCode, Record<string, CommodityInputRow>>>;
   totalRolledRows: number;
@@ -326,7 +350,7 @@ export async function rolloverPrevMonthFromSupabase(params: {
   while (true) {
     const { data, error } = await supabase
       .from('inflasi_lk_data')
-      .select('tahun,bulan,kode_wilayah,kode_komoditas,nk0,nk_n1,rh_n')
+      .select('tahun,bulan,kode_wilayah,nama_wilayah,kode_kelompok,kode_komoditas,nama_komoditas,bobot,nk_dasar,nk_n1,rh_n')
       .eq('tahun', prevYear)
       .eq('bulan', prevMonth)
       .in('kode_wilayah', params.targetRegions)
@@ -361,11 +385,11 @@ export async function rolloverPrevMonthFromSupabase(params: {
     const kode = normalizeKode7(row.kode_komoditas);
     if (!kode) continue;
 
-    const prevNk0 = Number(row.nk0);
+    const prevNk0 = Number(row.nk_dasar);
     const prevNkN1 = Number(row.nk_n1);
     const prevRhN = Number(row.rh_n);
 
-    // Hitung NK(N) bulan lalu = NK(N-1) * (RH(N) / 100) sebagai NK(N-1) periode aktif
+    // Hitung NK(N) bulan lalu = NK(N-1) * (RH(N) / 100) sebagai nk_n1 periode aktif
     const safePrevNk0 = Number.isFinite(prevNk0) ? prevNk0 : 0;
     const safePrevNkN1 = Number.isFinite(prevNkN1) ? prevNkN1 : 0;
     const safePrevRh = Number.isFinite(prevRhN) && prevRhN > 0 ? prevRhN : 100;
@@ -389,12 +413,23 @@ export async function rolloverPrevMonthFromSupabase(params: {
 
     perRegionCounts[regionCode] = (perRegionCounts[regionCode] ?? 0) + 1;
 
+    const regionInfo = getRegionInfo(regionCode);
+    const namaKomoditas =
+      row.nama_komoditas ??
+      params.customNodes?.[kode]?.nama ??
+      DEFAULT_NODE_NAMES.get(kode) ??
+      kode;
+
     upsertPayload.push({
       tahun: params.targetPeriod.year,
       bulan: params.targetPeriod.month,
       kode_wilayah: regionCode,
+      nama_wilayah: row.nama_wilayah ?? regionInfo.name,
+      kode_kelompok: row.kode_kelompok ?? kode.slice(0, 2),
       kode_komoditas: kode,
-      nk0: safePrevNk0,
+      nama_komoditas: namaKomoditas,
+      bobot: Number(row.bobot ?? 0),
+      nk_dasar: safePrevNk0,
       nk_n1: nkCalculated,
       rh_n: preservedRh,
     });
@@ -426,6 +461,8 @@ export async function saveRespondentDatasetToSupabase(
 ): Promise<number> {
   if (!supabase) return 0;
 
+  const dbFrekuensi = dataset.frequency.toLowerCase();
+
   // Bersihkan snapshot lama untuk kombinasi (tahun, bulan, kode_wilayah, frekuensi) sebelum upsert
   const { error: delError } = await supabase
     .from('inflasi_harga_responden')
@@ -433,7 +470,7 @@ export async function saveRespondentDatasetToSupabase(
     .eq('tahun', dataset.period.year)
     .eq('bulan', dataset.period.month)
     .eq('kode_wilayah', dataset.regionCode)
-    .eq('frekuensi', dataset.frequency);
+    .eq('frekuensi', dbFrekuensi);
 
   if (delError) {
     throw new Error(delError.message || 'Gagal memperbarui data lama di inflasi_harga_responden.');
@@ -445,31 +482,21 @@ export async function saveRespondentDatasetToSupabase(
     tahun: dataset.period.year,
     bulan: dataset.period.month,
     kode_wilayah: dataset.regionCode,
-    frekuensi: dataset.frequency,
-    obs_key: `${idx}_${obs.kodeKomoditas}_${obs.kodeKualitas || '0'}`,
     kode_komoditas: obs.kodeKomoditas,
-    komoditas: obs.komoditas,
-    kode_kualitas: obs.kodeKualitas,
-    bobot_kualitas: Number.isFinite(obs.bobotKualitas) ? obs.bobotKualitas : 0,
-    kualitas: obs.kualitas,
-    bobot_jenis_pasar: Number.isFinite(obs.bobotJenisPasar) ? obs.bobotJenisPasar : 0,
-    jenis_pasar: obs.jenisPasar,
-    bobot_pasar: Number.isFinite(obs.bobotPasar) ? obs.bobotPasar : 0,
-    pasar: obs.pasar,
-    nama_responden: obs.namaResponden,
-    prev_prices: obs.prevPrices,
-    curr_prices: obs.currPrices,
-    prev_avg_price: obs.prevAvgPrice,
-    curr_avg_price: obs.currAvgPrice,
-    price_relative: obs.priceRelative,
-    file_name: dataset.fileName,
+    kode_responden: `${obs.kodeKualitas || '0'}#${idx + 1}`,
+    nama_responden: obs.namaResponden || `Responden ${idx + 1}`,
+    kualitas: obs.kualitas || '-',
+    frekuensi: dbFrekuensi,
+    harga_lalu: obs.prevAvgPrice ?? 0,
+    harga_berjalan: obs.currAvgPrice ?? 0,
+    rh_responden: obs.priceRelative ?? 100,
   }));
 
   for (let i = 0; i < rows.length; i += BATCH_SIZE) {
     const chunk = rows.slice(i, i + BATCH_SIZE);
     const { error } = await supabase
       .from('inflasi_harga_responden')
-      .upsert(chunk, { onConflict: 'tahun,bulan,kode_wilayah,frekuensi,obs_key' });
+      .upsert(chunk, { onConflict: 'tahun,bulan,kode_wilayah,kode_komoditas,kode_responden' });
     if (error) {
       throw new Error(error.message || 'Gagal menyimpan data ke inflasi_harga_responden.');
     }
@@ -479,7 +506,8 @@ export async function saveRespondentDatasetToSupabase(
 }
 
 export async function fetchRespondentDatasetsFromSupabase(
-  period: PeriodSelection
+  period: PeriodSelection,
+  customNodes: Record<string, HierarchyNodeMeta> = {}
 ): Promise<Record<string, RespondentRHDataset>> {
   if (!supabase) return {};
 
@@ -490,14 +518,14 @@ export async function fetchRespondentDatasetsFromSupabase(
     const { data, error } = await supabase
       .from('inflasi_harga_responden')
       .select(
-        'tahun,bulan,kode_wilayah,frekuensi,obs_key,kode_komoditas,komoditas,kode_kualitas,bobot_kualitas,kualitas,bobot_jenis_pasar,jenis_pasar,bobot_pasar,pasar,nama_responden,prev_prices,curr_prices,prev_avg_price,curr_avg_price,price_relative,file_name,updated_at'
+        'id,tahun,bulan,kode_wilayah,kode_komoditas,kode_responden,nama_responden,kualitas,frekuensi,harga_lalu,harga_berjalan,rh_responden,updated_at'
       )
       .eq('tahun', period.year)
       .eq('bulan', period.month)
       .in('kode_wilayah', KAB_KOTA_CODES)
       .order('kode_wilayah', { ascending: true })
       .order('frekuensi', { ascending: true })
-      .order('obs_key', { ascending: true })
+      .order('kode_komoditas', { ascending: true })
       .range(offset, offset + PAGE_SIZE - 1);
 
     if (error) {
@@ -515,7 +543,6 @@ export async function fetchRespondentDatasetsFromSupabase(
     {
       regionCode: KabKotaCode;
       frequency: RespondentFrequency;
-      fileName: string | null;
       loadedAt: string | null;
       observations: RespondentPriceObservation[];
     }
@@ -524,39 +551,50 @@ export async function fetchRespondentDatasetsFromSupabase(
   for (const row of allRows) {
     const regionCode = String(row.kode_wilayah ?? '').trim();
     if (!isKabKotaCode(regionCode)) continue;
-    const freq = row.frekuensi;
-    if (freq !== 'MINGGUAN' && freq !== 'DWIMINGGUAN' && freq !== 'BULANAN') continue;
-
+    const freqUpper = String(row.frekuensi ?? '').toUpperCase();
+    if (freqUpper !== 'MINGGUAN' && freqUpper !== 'DWIMINGGUAN' && freqUpper !== 'BULANAN') {
+      continue;
+    }
+    const freq = freqUpper as RespondentFrequency;
     const scopedKey = `${regionCode}_${freq}`;
+
     if (!grouped.has(scopedKey)) {
       grouped.set(scopedKey, {
         regionCode,
         frequency: freq,
-        fileName: row.file_name ?? null,
         loadedAt: row.updated_at ?? null,
         observations: [],
       });
     }
 
+    const kode = normalizeKode7(row.kode_komoditas);
+    const namaKomoditas =
+      customNodes[kode]?.nama ?? DEFAULT_NODE_NAMES.get(kode) ?? kode;
+    const prevAvg = row.harga_lalu !== null && Number(row.harga_lalu) > 0 ? Number(row.harga_lalu) : null;
+    const currAvg =
+      row.harga_berjalan !== null && Number(row.harga_berjalan) > 0 ? Number(row.harga_berjalan) : null;
+    const rhVal = row.rh_responden !== null ? Number(row.rh_responden) : null;
+    const kodeKualitas = String(row.kode_responden ?? '').split('#')[0] ?? '';
+
     const bucket = grouped.get(scopedKey)!;
     bucket.observations.push({
-      id: `${regionCode}-${freq}-${row.obs_key}`,
-      kodeKomoditas: normalizeKode7(row.kode_komoditas),
-      komoditas: String(row.komoditas ?? ''),
-      kodeKualitas: String(row.kode_kualitas ?? ''),
-      bobotKualitas: Number(row.bobot_kualitas ?? 0),
+      id: `${regionCode}-${freq}-${row.id ?? row.kode_responden}`,
+      kodeKomoditas: kode,
+      komoditas: namaKomoditas,
+      kodeKualitas,
+      bobotKualitas: 0,
       kualitas: String(row.kualitas ?? ''),
-      bobotJenisPasar: Number(row.bobot_jenis_pasar ?? 0),
-      jenisPasar: String(row.jenis_pasar ?? ''),
-      bobotPasar: Number(row.bobot_pasar ?? 0),
-      pasar: String(row.pasar ?? ''),
+      bobotJenisPasar: 0,
+      jenisPasar: 'Umum',
+      bobotPasar: 0,
+      pasar: '-',
       namaResponden: String(row.nama_responden ?? ''),
       frequency: freq,
-      prevPrices: Array.isArray(row.prev_prices) ? row.prev_prices : [],
-      currPrices: Array.isArray(row.curr_prices) ? row.curr_prices : [],
-      prevAvgPrice: row.prev_avg_price !== null ? Number(row.prev_avg_price) : null,
-      currAvgPrice: row.curr_avg_price !== null ? Number(row.curr_avg_price) : null,
-      priceRelative: row.price_relative !== null ? Number(row.price_relative) : null,
+      prevPrices: [prevAvg],
+      currPrices: [currAvg],
+      prevAvgPrice: prevAvg,
+      currAvgPrice: currAvg,
+      priceRelative: rhVal,
     });
   }
 
@@ -566,7 +604,7 @@ export async function fetchRespondentDatasetsFromSupabase(
       regionCode: bucket.regionCode,
       period,
       frequency: bucket.frequency,
-      fileName: bucket.fileName,
+      fileName: 'Supabase (inflasi_harga_responden)',
       loadedAt: bucket.loadedAt,
       observations: bucket.observations,
       commoditySummaries: summarizeRespondentRH(bucket.observations, bucket.frequency),
@@ -579,17 +617,30 @@ export async function fetchRespondentDatasetsFromSupabase(
 export function buildRegionUpsertRows(
   period: PeriodSelection,
   regionCode: KabKotaCode,
-  regionInputs: Record<string, CommodityInputRow>
+  regionInputs: Record<string, CommodityInputRow>,
+  customNodes: Record<string, HierarchyNodeMeta> = {}
 ): SupabaseLKRow[] {
-  return Object.values(regionInputs).map((item) => ({
-    tahun: period.year,
-    bulan: period.month,
-    kode_wilayah: regionCode,
-    kode_komoditas: item.kode,
-    nk0: item.nk0,
-    nk_n1: item.nkPrev,
-    rh_n: item.rhCurrent,
-  }));
+  const regionInfo = getRegionInfo(regionCode);
+  const items = Object.values(regionInputs);
+  const totalNk0 = items.reduce((acc, it) => acc + (Number.isFinite(it.nk0) ? it.nk0 : 0), 0);
+
+  return items.map((item) => {
+    const namaKomoditas =
+      customNodes[item.kode]?.nama ?? DEFAULT_NODE_NAMES.get(item.kode) ?? item.kode;
+    return {
+      tahun: period.year,
+      bulan: period.month,
+      kode_wilayah: regionCode,
+      nama_wilayah: regionInfo.name,
+      kode_kelompok: item.kode.slice(0, 2),
+      kode_komoditas: item.kode,
+      nama_komoditas: namaKomoditas,
+      bobot: totalNk0 > 0 ? (item.nk0 / totalNk0) * 100 : 0,
+      nk_dasar: item.nk0,
+      nk_n1: item.nkPrev,
+      rh_n: item.rhCurrent,
+    };
+  });
 }
 
 export type SupabaseUploadLogKind = UploadFileKind | 'INLINE_EDIT' | 'ROLLOVER' | 'RESPONDEN_SYNC';

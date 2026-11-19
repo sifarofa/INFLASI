@@ -210,7 +210,10 @@ export function useInflationStore() {
       const [lkResult, logsResult, respResult] = await Promise.all([
         fetchPeriodLKFromSupabase(targetPeriod),
         fetchUploadLogsFromSupabase(targetPeriod).catch(() => null),
-        fetchRespondentDatasetsFromSupabase(targetPeriod).catch(() => null),
+        fetchRespondentDatasetsFromSupabase(
+          targetPeriod,
+          stateRef.current.customHierarchyNodes
+        ).catch(() => null),
       ]);
 
       const regionsFound = KAB_KOTA_CODES.filter(
@@ -480,7 +483,16 @@ export function useInflationStore() {
       setConnectionStatus('syncing');
       setSupabaseError(null);
       try {
-        const upsertRows = buildRegionUpsertRows(period, regionCode, nextRegionMap);
+        const mergedCustomNodes = { ...stateRef.current.customHierarchyNodes };
+        for (const n of nk0Update?.newHierarchyNodes ?? []) mergedCustomNodes[n.kode] = n;
+        for (const n of nkPrevPakomSync?.newHierarchyNodes ?? []) mergedCustomNodes[n.kode] = n;
+
+        const upsertRows = buildRegionUpsertRows(
+          period,
+          regionCode,
+          nextRegionMap,
+          mergedCustomNodes
+        );
         const savedRows = await upsertLKRowsBatchToSupabase(upsertRows);
         await insertUploadLogsToSupabase(
           logs.map((l) => ({
@@ -536,27 +548,32 @@ export function useInflationStore() {
       });
 
       if (isSupabaseConfigured) {
-        setConnectionStatus('syncing');
-        void upsertLKRowsBatchToSupabase([
-          {
-            tahun: activePeriod.year,
-            bulan: activePeriod.month,
-            kode_wilayah: regionCode,
-            kode_komoditas: kode,
-            nk0: updatedRow.nk0,
-            nk_n1: updatedRow.nkPrev,
-            rh_n: updatedRow.rhCurrent,
-          },
-        ])
-          .then(() => {
-            setSupabaseError(null);
-            setConnectionStatus('connected');
-          })
-          .catch((err) => {
-            const msg = err instanceof Error ? err.message : 'Gagal menyimpan edit inline ke Supabase.';
-            setSupabaseError(msg);
-            setConnectionStatus('local');
-          });
+        const regionMap = stateRef.current.kabKotaInputs[regionCode] ?? {};
+        const totalNk0 = Object.values(regionMap).reduce(
+          (acc, it) => acc + (Number.isFinite(it.nk0) ? it.nk0 : 0),
+          0
+        );
+        const [singleRow] = buildRegionUpsertRows(
+          activePeriod,
+          regionCode,
+          { [kode]: updatedRow },
+          stateRef.current.customHierarchyNodes
+        );
+        if (singleRow) {
+          singleRow.bobot = totalNk0 > 0 ? (updatedRow.nk0 / totalNk0) * 100 : 0;
+          setConnectionStatus('syncing');
+          void upsertLKRowsBatchToSupabase([singleRow])
+            .then(() => {
+              setSupabaseError(null);
+              setConnectionStatus('connected');
+            })
+            .catch((err) => {
+              const msg =
+                err instanceof Error ? err.message : 'Gagal menyimpan edit inline ke Supabase.';
+              setSupabaseError(msg);
+              setConnectionStatus('local');
+            });
+        }
       }
     },
     []
@@ -578,6 +595,7 @@ export function useInflationStore() {
           targetPeriod: currentPeriod,
           targetRegions,
           currentInputs: stateRef.current.kabKotaInputs,
+          customNodes: stateRef.current.customHierarchyNodes,
         });
 
         setState((prev) => {

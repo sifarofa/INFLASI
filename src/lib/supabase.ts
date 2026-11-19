@@ -3,7 +3,9 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 export type SupabaseConnectionStatus = 'connected' | 'local' | 'syncing' | 'error';
 
 const rawUrl = String(import.meta.env?.VITE_SUPABASE_URL ?? '').trim();
-const rawAnonKey = String(import.meta.env?.VITE_SUPABASE_ANON_KEY ?? '').trim();
+const rawAnonKey = String(
+  import.meta.env?.VITE_SUPABASE_ANON_KEY ?? import.meta.env?.VITE_SUPABASE_PUBLISHABLE_KEY ?? ''
+).trim();
 
 function isValidHttpUrl(value: string): boolean {
   if (!value || value === 'MY_SUPABASE_URL') return false;
