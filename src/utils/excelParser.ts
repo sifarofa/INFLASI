@@ -919,6 +919,43 @@ export function parseRespondentObservations(
   return observations;
 }
 
+function arePriceArraysEqual(a: (number | null)[], b: (number | null)[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const va = a[i] ?? null;
+    const vb = b[i] ?? null;
+    if (va === null && vb === null) continue;
+    if (va === null || vb === null) return false;
+    if (Math.abs(va - vb) > 0.0001) return false;
+  }
+  return true;
+}
+
+export function recalculateRespondentObservation(
+  obs: RespondentPriceObservation,
+  nextCurrPricesRaw: (number | null)[]
+): RespondentPriceObservation {
+  const baseline = obs.originalCurrPrices ?? [...obs.currPrices];
+  const currPrices = nextCurrPricesRaw.map((v) =>
+    v !== null && Number.isFinite(v) && v > 0 ? v : null
+  );
+  const currAvgPrice = geometricMean(currPrices.filter((v): v is number => v !== null));
+  const priceRelative =
+    obs.prevAvgPrice && currAvgPrice && obs.prevAvgPrice > 0
+      ? (currAvgPrice / obs.prevAvgPrice) * 100
+      : null;
+  const changed = !arePriceArraysEqual(currPrices, baseline);
+
+  return {
+    ...obs,
+    currPrices,
+    currAvgPrice,
+    priceRelative,
+    hargaDiperbaiki: changed,
+    originalCurrPrices: changed ? baseline : undefined,
+  };
+}
+
 /**
  * BPS Hierarchical Geometric Mean RH Aggregation:
  * Respondent RH -> Pasar (geom mean) -> Jenis Pasar (weighted by Bobot Pasar)

@@ -197,6 +197,8 @@ export interface RespondentPriceObservation {
   priceRelative: number | null; // (currAvg / prevAvg) * 100
   catatan?: string;
   perluPerbaikan?: boolean;
+  hargaDiperbaiki?: boolean;
+  originalCurrPrices?: (number | null)[];
 }
 
 export interface RespondentCommoditySummary {

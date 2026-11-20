@@ -17,6 +17,10 @@ import type {
 import { buildInitialKabKotaInputs, DEFAULT_PERIOD, KAB_KOTA_CODES } from '../data/regions';
 import { calculateAllRegions } from '../utils/calculationEngine';
 import {
+  recalculateRespondentObservation,
+  summarizeRespondentRH,
+} from '../utils/excelParser';
+import {
   applyAnnotationsToDataset,
   clearRespondentDatasets,
   loadRespondentDatasets,
@@ -778,6 +782,82 @@ export function useInflationStore() {
     []
   );
 
+  const updateRespondentPrice = useCallback(
+    (
+      regionCode: KabKotaCode,
+      frequency: RespondentFrequency,
+      observationId: string,
+      priceIndex: number,
+      nextValue: number | null
+    ) => {
+      const scopedKey = `${regionCode}_${frequency}`;
+      respondentHydratedRef.current = true;
+      setRespondentDatasetsState((prev) => {
+        const ds = prev[scopedKey];
+        if (!ds) return prev;
+        let updatedTarget: typeof ds.observations[number] | null = null;
+        const nextObservations = ds.observations.map((obs) => {
+          if (obs.id !== observationId) return obs;
+          const nextCurrPrices = [...obs.currPrices];
+          if (priceIndex < 0 || priceIndex >= nextCurrPrices.length) return obs;
+          nextCurrPrices[priceIndex] =
+            nextValue !== null && Number.isFinite(nextValue) && nextValue > 0 ? nextValue : null;
+          updatedTarget = recalculateRespondentObservation(obs, nextCurrPrices);
+          return updatedTarget;
+        });
+        if (!updatedTarget) return prev;
+        const targetObs: typeof ds.observations[number] = updatedTarget;
+        saveObservationAnnotation(ds.period, regionCode, frequency, targetObs, {
+          currPrices: targetObs.currPrices,
+          originalCurrPrices: targetObs.originalCurrPrices,
+          hargaDiperbaiki: Boolean(targetObs.hargaDiperbaiki),
+        });
+        return {
+          ...prev,
+          [scopedKey]: {
+            ...ds,
+            observations: nextObservations,
+            commoditySummaries: summarizeRespondentRH(nextObservations, frequency),
+          },
+        };
+      });
+    },
+    []
+  );
+
+  const resetRespondentPrice = useCallback(
+    (regionCode: KabKotaCode, frequency: RespondentFrequency, observationId: string) => {
+      const scopedKey = `${regionCode}_${frequency}`;
+      respondentHydratedRef.current = true;
+      setRespondentDatasetsState((prev) => {
+        const ds = prev[scopedKey];
+        if (!ds) return prev;
+        let updatedTarget: typeof ds.observations[number] | null = null;
+        const nextObservations = ds.observations.map((obs) => {
+          if (obs.id !== observationId || !obs.originalCurrPrices) return obs;
+          updatedTarget = recalculateRespondentObservation(obs, obs.originalCurrPrices);
+          return updatedTarget;
+        });
+        if (!updatedTarget) return prev;
+        const targetObs: typeof ds.observations[number] = updatedTarget;
+        saveObservationAnnotation(ds.period, regionCode, frequency, targetObs, {
+          currPrices: targetObs.currPrices,
+          originalCurrPrices: undefined,
+          hargaDiperbaiki: false,
+        });
+        return {
+          ...prev,
+          [scopedKey]: {
+            ...ds,
+            observations: nextObservations,
+            commoditySummaries: summarizeRespondentRH(nextObservations, frequency),
+          },
+        };
+      });
+    },
+    []
+  );
+
   const resetToInitialData = useCallback(() => {
     const fresh = createInitialState();
     setState(fresh);
@@ -810,6 +890,8 @@ export function useInflationStore() {
     rolloverPrevMonthNK,
     setRespondentDataset,
     updateRespondentAnnotation,
+    updateRespondentPrice,
+    resetRespondentPrice,
     resetToInitialData,
     refreshFromSupabase: () => refreshFromSupabase(stateRef.current.period, false),
   };

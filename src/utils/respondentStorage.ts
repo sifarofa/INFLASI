@@ -4,6 +4,7 @@ import type {
   RespondentPriceObservation,
   RespondentRHDataset,
 } from '../types/inflasi';
+import { recalculateRespondentObservation, summarizeRespondentRH } from './excelParser';
 
 const DB_NAME = 'kalbar_ihk_respondent_db';
 const STORE_NAME = 'datasets';
@@ -13,6 +14,9 @@ const ANNOTATIONS_STORAGE_KEY = 'kalbar_ihk_respondent_annotations_v1';
 export interface RespondentObservationAnnotation {
   catatan?: string;
   perluPerbaikan?: boolean;
+  currPrices?: (number | null)[];
+  originalCurrPrices?: (number | null)[];
+  hargaDiperbaiki?: boolean;
   updatedAt?: string;
 }
 
@@ -48,22 +52,51 @@ export function saveObservationAnnotation(
   regionCode: string,
   frequency: RespondentFrequency,
   obs: RespondentPriceObservation,
-  patch: { catatan?: string; perluPerbaikan?: boolean }
+  patch: {
+    catatan?: string;
+    perluPerbaikan?: boolean;
+    currPrices?: (number | null)[];
+    originalCurrPrices?: (number | null)[];
+    hargaDiperbaiki?: boolean;
+  }
 ): void {
   try {
     const all = readAllAnnotations();
     const scopeKey = buildDatasetAnnotationScopeKey(period, regionCode, frequency);
     const obsKey = buildObservationAnnotationKey(obs);
     const currentScope = { ...(all[scopeKey] ?? {}) };
-    const nextCatatan = (patch.catatan ?? obs.catatan ?? '').trim();
-    const nextFlag = Boolean(patch.perluPerbaikan ?? obs.perluPerbaikan);
+    const existing = currentScope[obsKey];
 
-    if (!nextCatatan && !nextFlag) {
+    const rawCatatan = patch.catatan !== undefined ? patch.catatan : (obs.catatan ?? existing?.catatan ?? '');
+    const nextCatatanTrimmed = rawCatatan.trim();
+    const nextFlag =
+      patch.perluPerbaikan !== undefined
+        ? Boolean(patch.perluPerbaikan)
+        : Boolean(obs.perluPerbaikan ?? existing?.perluPerbaikan);
+    const nextHargaDiperbaiki =
+      patch.hargaDiperbaiki !== undefined
+        ? Boolean(patch.hargaDiperbaiki)
+        : Boolean(obs.hargaDiperbaiki ?? existing?.hargaDiperbaiki);
+
+    if (!nextCatatanTrimmed && !nextFlag && !nextHargaDiperbaiki) {
       delete currentScope[obsKey];
     } else {
+      const nextCurrPrices = nextHargaDiperbaiki
+        ? (patch.currPrices ?? obs.currPrices ?? existing?.currPrices)
+        : undefined;
+      const nextOrigPrices = nextHargaDiperbaiki
+        ? (patch.originalCurrPrices ?? obs.originalCurrPrices ?? existing?.originalCurrPrices)
+        : undefined;
       currentScope[obsKey] = {
-        catatan: patch.catatan ?? obs.catatan ?? '',
-        perluPerbaikan: nextFlag,
+        ...(rawCatatan ? { catatan: rawCatatan } : {}),
+        ...(nextFlag ? { perluPerbaikan: true } : {}),
+        ...(nextHargaDiperbaiki && nextCurrPrices
+          ? {
+              hargaDiperbaiki: true,
+              currPrices: nextCurrPrices,
+              originalCurrPrices: nextOrigPrices,
+            }
+          : {}),
         updatedAt: new Date().toISOString(),
       };
     }
@@ -92,18 +125,45 @@ export function applyAnnotationsToDataset(
   if (!scopeMap || Object.keys(scopeMap).length === 0) return dataset;
 
   let changed = false;
+  let pricesChanged = false;
   const nextObs = dataset.observations.map((obs) => {
     const ann = scopeMap[buildObservationAnnotationKey(obs)];
     if (!ann) return obs;
     changed = true;
-    return {
+
+    let updated: RespondentPriceObservation = {
       ...obs,
       catatan: ann.catatan ?? obs.catatan ?? '',
       perluPerbaikan: ann.perluPerbaikan ?? obs.perluPerbaikan ?? false,
     };
+
+    if (
+      ann.hargaDiperbaiki &&
+      Array.isArray(ann.currPrices) &&
+      ann.currPrices.length === obs.currPrices.length
+    ) {
+      pricesChanged = true;
+      updated = recalculateRespondentObservation(
+        {
+          ...updated,
+          originalCurrPrices:
+            ann.originalCurrPrices ?? obs.originalCurrPrices ?? [...obs.currPrices],
+        },
+        ann.currPrices
+      );
+    }
+
+    return updated;
   });
 
-  return changed ? { ...dataset, observations: nextObs } : dataset;
+  if (!changed) return dataset;
+  return {
+    ...dataset,
+    observations: nextObs,
+    commoditySummaries: pricesChanged
+      ? summarizeRespondentRH(nextObs, dataset.frequency)
+      : dataset.commoditySummaries,
+  };
 }
 
 function openDb(): Promise<IDBDatabase | null> {

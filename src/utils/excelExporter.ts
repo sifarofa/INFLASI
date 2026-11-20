@@ -339,7 +339,13 @@ export function exportRespondentAnalysisWorkbook(
       o.currAvgPrice ? Number(o.currAvgPrice.toFixed(2)) : '',
       o.priceRelative ? Number(o.priceRelative.toFixed(4)) : '',
       o.priceRelative ? Number((o.priceRelative - 100).toFixed(4)) : '',
-      o.perluPerbaikan ? 'PERLU PERBAIKAN' : 'Normal',
+      o.hargaDiperbaiki && o.perluPerbaikan
+        ? 'HARGA DIPERBAIKI + PERLU PERBAIKAN'
+        : o.hargaDiperbaiki
+        ? 'HARGA DIPERBAIKI'
+        : o.perluPerbaikan
+        ? 'PERLU PERBAIKAN'
+        : 'Normal',
       o.catatan ?? '',
     ]),
   ];

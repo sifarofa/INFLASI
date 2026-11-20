@@ -19,11 +19,7 @@ import {
 import type { AuthSession, KabKotaCode, RegionCode } from './types/inflasi';
 import { BULAN_OPTIONS, formatPeriodLabel, REGIONS } from './data/regions';
 import { useInflationStore } from './hooks/useInflationStore';
-import {
-  clearStoredSession,
-  loadStoredSession,
-  saveStoredSession,
-} from './utils/authSession';
+import { clearStoredSession } from './utils/authSession';
 import { exportAllRegionsWorkbook, exportSingleRegionWorkbook } from './utils/excelExporter';
 import { LoginLandingView } from './components/LoginLandingView';
 import { DashboardView } from './components/DashboardView';
@@ -54,27 +50,23 @@ export default function App() {
     rolloverPrevMonthNK,
     setRespondentDataset,
     updateRespondentAnnotation,
+    updateRespondentPrice,
+    resetRespondentPrice,
     resetToInitialData,
   } = useInflationStore();
 
-  const [session, setSession] = useState<AuthSession | null>(() => loadStoredSession());
+  const [session, setSession] = useState<AuthSession | null>(() => {
+    clearStoredSession();
+    return null;
+  });
   const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
-  const [selectedRegion, setSelectedRegion] = useState<RegionCode>(() => {
-    const stored = loadStoredSession();
-    return stored ? stored.regionCode : '6100';
-  });
-  const [lastKabKota, setLastKabKota] = useState<KabKotaCode>(() => {
-    const stored = loadStoredSession();
-    return stored && stored.regionCode !== '6100'
-      ? (stored.regionCode as KabKotaCode)
-      : '6107';
-  });
+  const [selectedRegion, setSelectedRegion] = useState<RegionCode>('6100');
+  const [lastKabKota, setLastKabKota] = useState<KabKotaCode>('6107');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [confirmResetOpen, setConfirmResetOpen] = useState(false);
 
   const handleLoginSuccess = (newSession: AuthSession) => {
-    saveStoredSession(newSession);
     setSession(newSession);
     setSelectedRegion(newSession.regionCode);
     if (newSession.regionCode !== '6100') {
@@ -676,6 +668,8 @@ export default function App() {
               allowedRegion={session.regionCode}
               onSetDataset={setRespondentDataset}
               onUpdateObservationAnnotation={updateRespondentAnnotation}
+              onUpdateObservationPrice={updateRespondentPrice}
+              onResetObservationPrice={resetRespondentPrice}
               onApplyCalculatedRhToLK={
                 isProvinsi
                   ? (regionCode, rhUpdates, sourceLabel) =>

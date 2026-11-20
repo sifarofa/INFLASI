@@ -11,6 +11,7 @@ import {
   Flag,
   Layers,
   Loader2,
+  RotateCcw,
   Search,
   Upload,
 } from 'lucide-react';
@@ -51,6 +52,18 @@ interface RespondentRHViewProps {
     observationId: string,
     patch: { catatan?: string; perluPerbaikan?: boolean }
   ) => void;
+  onUpdateObservationPrice?: (
+    regionCode: KabKotaCode,
+    frequency: RespondentFrequency,
+    observationId: string,
+    priceIndex: number,
+    nextValue: number | null
+  ) => void;
+  onResetObservationPrice?: (
+    regionCode: KabKotaCode,
+    frequency: RespondentFrequency,
+    observationId: string
+  ) => void;
   onApplyCalculatedRhToLK?: (
     regionCode: KabKotaCode,
     rhUpdates: Record<string, number>,
@@ -60,9 +73,9 @@ interface RespondentRHViewProps {
 
 const ObservationNoteInput: React.FC<{
   value: string;
-  flagged?: boolean;
+  highlighted?: boolean;
   onCommit: (nextNote: string) => void;
-}> = ({ value, flagged, onCommit }) => {
+}> = ({ value, highlighted, onCommit }) => {
   const [draft, setDraft] = useState(value);
 
   useEffect(() => {
@@ -92,9 +105,82 @@ const ObservationNoteInput: React.FC<{
       placeholder="Tulis catatan perbaikan..."
       aria-label="Catatan perbaikan responden"
       className={`w-full rounded border px-2 py-1 text-[11px] font-medium text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-1 ${
-        flagged
-          ? 'border-rose-300 bg-white focus:border-rose-600 focus:ring-rose-500/30'
+        highlighted
+          ? 'border-indigo-300 bg-white focus:border-indigo-600 focus:ring-indigo-500/30'
           : 'border-slate-300 bg-white focus:border-slate-800 focus:ring-slate-500/20'
+      }`}
+    />
+  );
+};
+
+const EditablePriceInput: React.FC<{
+  value: number | null;
+  edited?: boolean;
+  align?: 'center' | 'right';
+  ariaLabel: string;
+  onCommit: (nextValue: number | null) => void;
+}> = ({ value, edited, align = 'center', ariaLabel, onCommit }) => {
+  const [focused, setFocused] = useState(false);
+  const [draft, setDraft] = useState<string>(value ? String(value) : '');
+
+  useEffect(() => {
+    if (!focused) {
+      setDraft(value ? String(value) : '');
+    }
+  }, [value, focused]);
+
+  const commit = () => {
+    setFocused(false);
+    const cleaned = draft.trim().replace(/\s+/g, '');
+    if (!cleaned) {
+      if (value !== null) onCommit(null);
+      return;
+    }
+    const normalized =
+      cleaned.includes('.') && !cleaned.includes(',') && /^\d{1,3}(\.\d{3})+$/.test(cleaned)
+        ? Number(cleaned.replace(/\./g, ''))
+        : Number(cleaned.replace(/,/g, '.'));
+    if (!Number.isFinite(normalized) || normalized <= 0) {
+      setDraft(value ? String(value) : '');
+      return;
+    }
+    if (value === null || Math.abs(normalized - value) > 0.0001) {
+      onCommit(normalized);
+    }
+  };
+
+  const displayText = focused ? draft : value ? formatNumber(value, 0) : '—';
+
+  return (
+    <input
+      type="text"
+      inputMode="numeric"
+      aria-label={ariaLabel}
+      value={displayText}
+      onFocus={(e) => {
+        setFocused(true);
+        setDraft(value ? String(value) : '');
+        requestAnimationFrame(() => e.target.select());
+      }}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.currentTarget.blur();
+        } else if (e.key === 'Escape') {
+          setDraft(value ? String(value) : '');
+          setFocused(false);
+          e.currentTarget.blur();
+        }
+      }}
+      className={`w-full rounded px-0.5 py-0 font-mono tabular-nums bg-transparent focus:bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 ${
+        align === 'right' ? 'text-right text-[11.5px]' : 'text-center text-[10px]'
+      } ${
+        edited
+          ? 'font-extrabold text-indigo-900'
+          : value
+          ? 'font-bold text-slate-950'
+          : 'font-medium text-slate-400 focus:text-slate-950'
       }`}
     />
   );
@@ -155,6 +241,8 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
   allowedRegion,
   onSetDataset,
   onUpdateObservationAnnotation,
+  onUpdateObservationPrice,
+  onResetObservationPrice,
   onApplyCalculatedRhToLK,
 }) => {
   const isProvinsi = userRole === 'PROVINSI';
@@ -307,7 +395,7 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
     let missing = 0;
     let flagged = 0;
     for (const o of obs) {
-      if (o.perluPerbaikan) flagged++;
+      if (o.perluPerbaikan || o.hargaDiperbaiki) flagged++;
       if (o.priceRelative === null) missing++;
       else if (o.priceRelative > 100.001) up++;
       else if (o.priceRelative < 99.999) down++;
@@ -319,7 +407,7 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
   const flaggedCountByCommodity = useMemo(() => {
     const map: Record<string, number> = {};
     for (const o of currentDataset?.observations ?? []) {
-      if (o.perluPerbaikan) {
+      if (o.perluPerbaikan || o.hargaDiperbaiki) {
         map[o.kodeKomoditas] = (map[o.kodeKomoditas] ?? 0) + 1;
       }
     }
@@ -349,7 +437,7 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
       )
         return false;
       if (movementFilter === 'MISSING' && o.priceRelative !== null) return false;
-      if (movementFilter === 'FLAGGED' && !o.perluPerbaikan) return false;
+      if (movementFilter === 'FLAGGED' && !o.perluPerbaikan && !o.hargaDiperbaiki) return false;
 
       if (q) {
         const hay = `${o.kodeKomoditas} ${o.komoditas} ${o.kualitas} ${o.pasar} ${o.namaResponden} ${o.catatan ?? ''}`.toLowerCase();
@@ -383,8 +471,8 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
         return sortDir === 'asc' ? cmp : -cmp;
       }
       if (sortKey === 'FLAGGED') {
-        const fa = a.perluPerbaikan ? 1 : 0;
-        const fb = b.perluPerbaikan ? 1 : 0;
+        const fa = a.perluPerbaikan || a.hargaDiperbaiki ? 1 : 0;
+        const fb = b.perluPerbaikan || b.hargaDiperbaiki ? 1 : 0;
         if (fa !== fb) return sortDir === 'desc' ? fb - fa : fa - fb;
         const ca = (a.catatan ?? '').trim() ? 1 : 0;
         const cb = (b.catatan ?? '').trim() ? 1 : 0;
@@ -693,14 +781,14 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
               onClick={() => setMovementFilter(movementFilter === 'FLAGGED' ? 'ALL' : 'FLAGGED')}
               className={`rounded-lg border p-3.5 cursor-pointer transition-colors ${
                 movementFilter === 'FLAGGED'
-                  ? 'border-rose-600 bg-rose-50'
-                  : 'border-slate-200 bg-white hover:border-rose-300'
+                  ? 'border-indigo-600 bg-indigo-50'
+                  : 'border-slate-200 bg-white hover:border-indigo-300'
               }`}
             >
-              <span className="text-xs font-semibold text-rose-800 inline-flex items-center gap-1">
-                <Flag className="h-3 w-3" /> Perlu Perbaikan
+              <span className="text-xs font-semibold text-indigo-900 inline-flex items-center gap-1">
+                <Flag className="h-3 w-3 text-indigo-700" /> Diperbaiki / Ditandai
               </span>
-              <span className="mt-1 text-2xl font-mono font-extrabold text-rose-700 block tabular-nums">
+              <span className="mt-1 text-2xl font-mono font-extrabold text-indigo-700 block tabular-nums">
                 {stats.flagged}
               </span>
             </div>
@@ -818,7 +906,7 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
                     <option value="DOWN">Turun (RH &lt; 100)</option>
                     <option value="FLAT">Tetap (RH = 100)</option>
                     <option value="MISSING">Harga Kosong (.00)</option>
-                    <option value="FLAGGED">Perlu Perbaikan ({stats.flagged})</option>
+                    <option value="FLAGGED">Diperbaiki / Ditandai ({stats.flagged})</option>
                   </select>
                 </div>
 
@@ -989,13 +1077,13 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
                             }}
                             className={`cursor-pointer transition-colors ${
                               flagCount > 0
-                                ? 'bg-rose-50/70 hover:bg-rose-100/60'
+                                ? 'bg-indigo-50/75 hover:bg-indigo-100/65'
                                 : 'hover:bg-slate-50'
                             }`}
                           >
                             <td
                               className={`py-2 px-2.5 border-r border-slate-100 truncate ${
-                                flagCount > 0 ? 'border-l-4 border-l-rose-600' : ''
+                                flagCount > 0 ? 'border-l-4 border-l-indigo-600' : ''
                               }`}
                               title={`${sum.kodeKomoditas} — ${sum.komoditas}`}
                             >
@@ -1004,7 +1092,7 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
                               </span>
                               <span className="font-bold text-slate-950">{sum.komoditas}</span>
                               {flagCount > 0 && (
-                                <span className="ml-2 inline-flex items-center gap-1 rounded bg-rose-100 px-1.5 py-0.5 text-[9.5px] font-bold text-rose-800 border border-rose-300">
+                                <span className="ml-2 inline-flex items-center gap-1 rounded bg-indigo-100 px-1.5 py-0.5 text-[9.5px] font-bold text-indigo-900 border border-indigo-300">
                                   <Flag className="h-2.5 w-2.5" />
                                   {flagCount} perbaikan
                                 </span>
@@ -1268,18 +1356,20 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
                       ) : (
                         pagedRows.map((obs) => {
                           const isFlagged = Boolean(obs.perluPerbaikan);
+                          const isPriceEdited = Boolean(obs.hargaDiperbaiki);
+                          const isHighlighted = isFlagged || isPriceEdited;
                           return (
                             <tr
                               key={obs.id}
                               className={
-                                isFlagged
-                                  ? 'bg-rose-50/90 hover:bg-rose-100/70 transition-colors align-top'
+                                isHighlighted
+                                  ? 'bg-indigo-50/90 hover:bg-indigo-100/75 transition-colors align-top'
                                   : 'hover:bg-slate-50/90 transition-colors align-top'
                               }
                             >
                               <td
                                 className={`py-2 px-2 border-r border-slate-100 ${
-                                  isFlagged ? 'border-l-4 border-l-rose-600' : ''
+                                  isHighlighted ? 'border-l-4 border-l-indigo-600' : ''
                                 }`}
                               >
                                 <div
@@ -1300,10 +1390,19 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
                                 <div className="font-mono text-[10px] font-medium text-slate-600 truncate mt-0.5">
                                   {obs.kodeKualitas} · Bobot {formatNumber(obs.bobotKualitas, 2)}
                                 </div>
-                                {isFlagged && (
-                                  <span className="mt-1 inline-flex items-center gap-1 rounded bg-rose-100 px-1.5 py-0.5 text-[9.5px] font-bold text-rose-800 border border-rose-300">
-                                    <Flag className="h-2.5 w-2.5" /> Perlu Perbaikan
-                                  </span>
+                                {(isPriceEdited || isFlagged) && (
+                                  <div className="mt-1 flex flex-wrap items-center gap-1">
+                                    {isPriceEdited && (
+                                      <span className="inline-flex items-center rounded bg-indigo-100 px-1.5 py-0.5 text-[9.5px] font-bold text-indigo-900 border border-indigo-300">
+                                        Harga Diperbaiki
+                                      </span>
+                                    )}
+                                    {isFlagged && (
+                                      <span className="inline-flex items-center gap-1 rounded bg-indigo-100 px-1.5 py-0.5 text-[9.5px] font-bold text-indigo-900 border border-indigo-300">
+                                        <Flag className="h-2.5 w-2.5" /> Perlu Perbaikan
+                                      </span>
+                                    )}
+                                  </div>
                                 )}
                               </td>
                               <td className="py-2 px-2 border-r border-slate-100">
@@ -1387,31 +1486,73 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
 
                               <td className="py-1.5 px-1.5 border-r border-slate-100 bg-amber-50/40">
                                 {meta.periodCols.length === 1 ? (
-                                  <div className="rounded border border-amber-200/90 bg-white/95 px-2 py-1 text-right font-mono text-[11.5px] font-bold tabular-nums text-slate-950">
-                                    {obs.currPrices[0] ? formatNumber(obs.currPrices[0], 0) : '—'}
+                                  <div
+                                    className={`rounded border px-1.5 py-0.5 ${
+                                      obs.originalCurrPrices &&
+                                      obs.originalCurrPrices[0] !== obs.currPrices[0]
+                                        ? 'border-indigo-400 bg-indigo-50/85'
+                                        : 'border-amber-200/90 bg-white/95'
+                                    }`}
+                                  >
+                                    <EditablePriceInput
+                                      value={obs.currPrices[0] ?? null}
+                                      edited={Boolean(
+                                        obs.originalCurrPrices &&
+                                          obs.originalCurrPrices[0] !== obs.currPrices[0]
+                                      )}
+                                      align="right"
+                                      ariaLabel={`Harga N ${obs.komoditas} ${obs.namaResponden}`}
+                                      onCommit={(nextVal) =>
+                                        onUpdateObservationPrice?.(
+                                          targetRegion,
+                                          frequency,
+                                          obs.id,
+                                          0,
+                                          nextVal
+                                        )
+                                      }
+                                    />
                                   </div>
                                 ) : meta.periodCols.length === 5 ? (
                                   <div className="grid grid-cols-5 gap-1 font-mono tabular-nums">
                                     {meta.periodCols.map((col, idx) => {
                                       const val = obs.currPrices[idx] ?? null;
+                                      const slotEdited = Boolean(
+                                        obs.originalCurrPrices &&
+                                          obs.originalCurrPrices[idx] !== obs.currPrices[idx]
+                                      );
                                       return (
                                         <div
                                           key={`${obs.id}-curr-${col}`}
-                                          title={`${col}: ${val ? formatNumber(val, 0) : 'Kosong'}`}
-                                          className="rounded border border-amber-200/90 bg-white/95 px-0.5 py-0.5 text-center leading-tight"
+                                          title={`Klik untuk edit ${col}: ${val ? formatNumber(val, 0) : 'Kosong'}`}
+                                          className={`rounded border px-0.5 py-0.5 text-center leading-tight ${
+                                            slotEdited
+                                              ? 'border-indigo-400 bg-indigo-50/85'
+                                              : 'border-amber-200/90 bg-white/95 hover:border-amber-400'
+                                          }`}
                                         >
-                                          <div className="text-[8.5px] font-bold text-amber-950">
-                                            {col}
-                                          </div>
                                           <div
-                                            className={`text-[10px] truncate ${
-                                              val
-                                                ? 'font-bold text-slate-950'
-                                                : 'text-slate-400'
+                                            className={`text-[8.5px] font-bold ${
+                                              slotEdited ? 'text-indigo-900' : 'text-amber-950'
                                             }`}
                                           >
-                                            {val ? formatNumber(val, 0) : '—'}
+                                            {col}
                                           </div>
+                                          <EditablePriceInput
+                                            value={val}
+                                            edited={slotEdited}
+                                            align="center"
+                                            ariaLabel={`Harga ${col} ${obs.komoditas} ${obs.namaResponden}`}
+                                            onCommit={(nextVal) =>
+                                              onUpdateObservationPrice?.(
+                                                targetRegion,
+                                                frequency,
+                                                obs.id,
+                                                idx,
+                                                nextVal
+                                              )
+                                            }
+                                          />
                                         </div>
                                       );
                                     })}
@@ -1420,23 +1561,42 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
                                   <div className="grid grid-cols-2 gap-1 font-mono text-[10.5px] tabular-nums">
                                     {meta.periodCols.map((col, idx) => {
                                       const val = obs.currPrices[idx] ?? null;
+                                      const slotEdited = Boolean(
+                                        obs.originalCurrPrices &&
+                                          obs.originalCurrPrices[idx] !== obs.currPrices[idx]
+                                      );
                                       return (
                                         <div
                                           key={`${obs.id}-curr-${col}`}
-                                          className="flex items-center justify-between gap-1 rounded border border-amber-200/90 bg-white/95 px-1.5 py-0.5"
+                                          title={`Klik untuk edit ${col}: ${val ? formatNumber(val, 0) : 'Kosong'}`}
+                                          className={`flex items-center justify-between gap-1 rounded border px-1.5 py-0.5 ${
+                                            slotEdited
+                                              ? 'border-indigo-400 bg-indigo-50/85'
+                                              : 'border-amber-200/90 bg-white/95 hover:border-amber-400'
+                                          }`}
                                         >
-                                          <span className="text-[9.5px] font-bold text-amber-950">
+                                          <span
+                                            className={`text-[9.5px] font-bold shrink-0 ${
+                                              slotEdited ? 'text-indigo-900' : 'text-amber-950'
+                                            }`}
+                                          >
                                             {col}
                                           </span>
-                                          <span
-                                            className={
-                                              val
-                                                ? 'font-bold text-slate-950'
-                                                : 'text-slate-400'
+                                          <EditablePriceInput
+                                            value={val}
+                                            edited={slotEdited}
+                                            align="right"
+                                            ariaLabel={`Harga ${col} ${obs.komoditas} ${obs.namaResponden}`}
+                                            onCommit={(nextVal) =>
+                                              onUpdateObservationPrice?.(
+                                                targetRegion,
+                                                frequency,
+                                                obs.id,
+                                                idx,
+                                                nextVal
+                                              )
                                             }
-                                          >
-                                            {val ? formatNumber(val, 0) : '—'}
-                                          </span>
+                                          />
                                         </div>
                                       );
                                     })}
@@ -1459,30 +1619,49 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
                               </td>
                               <td className="py-1.5 px-2">
                                 <div className="space-y-1.5">
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      onUpdateObservationAnnotation?.(
-                                        targetRegion,
-                                        frequency,
-                                        obs.id,
-                                        { perluPerbaikan: !isFlagged }
-                                      )
-                                    }
-                                    className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-bold transition-colors ${
-                                      isFlagged
-                                        ? 'bg-rose-600 text-white hover:bg-rose-700'
-                                        : 'border border-slate-300 bg-white text-slate-800 hover:bg-slate-100'
-                                    }`}
-                                  >
-                                    <Flag className="h-3 w-3" />
-                                    <span>
-                                      {isFlagged ? 'Perlu Perbaikan' : 'Tandai Perbaikan'}
-                                    </span>
-                                  </button>
+                                  <div className="flex flex-wrap items-center gap-1">
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        onUpdateObservationAnnotation?.(
+                                          targetRegion,
+                                          frequency,
+                                          obs.id,
+                                          { perluPerbaikan: !isFlagged }
+                                        )
+                                      }
+                                      className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-bold transition-colors ${
+                                        isFlagged
+                                          ? 'bg-indigo-600 text-white hover:bg-indigo-700'
+                                          : 'border border-slate-300 bg-white text-slate-800 hover:bg-slate-100'
+                                      }`}
+                                    >
+                                      <Flag className="h-3 w-3" />
+                                      <span>
+                                        {isFlagged ? 'Perlu Perbaikan' : 'Tandai Perbaikan'}
+                                      </span>
+                                    </button>
+                                    {isPriceEdited && (
+                                      <button
+                                        type="button"
+                                        title="Kembalikan harga ke nilai awal sebelum diedit"
+                                        onClick={() =>
+                                          onResetObservationPrice?.(
+                                            targetRegion,
+                                            frequency,
+                                            obs.id
+                                          )
+                                        }
+                                        className="inline-flex items-center gap-1 rounded border border-indigo-300 bg-white px-1.5 py-0.5 text-[10px] font-bold text-indigo-800 hover:bg-indigo-50"
+                                      >
+                                        <RotateCcw className="h-2.5 w-2.5" />
+                                        <span>Reset</span>
+                                      </button>
+                                    )}
+                                  </div>
                                   <ObservationNoteInput
                                     value={obs.catatan ?? ''}
-                                    flagged={isFlagged}
+                                    highlighted={isHighlighted}
                                     onCommit={(nextNote) =>
                                       onUpdateObservationAnnotation?.(
                                         targetRegion,
