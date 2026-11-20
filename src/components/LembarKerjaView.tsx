@@ -29,7 +29,14 @@ import {
   getRegionInfo,
   KAB_KOTA_CODES,
 } from '../data/regions';
-import { formatAndil, formatIndex, formatNK, formatNumber, formatSignedPct } from '../utils/formatters';
+import {
+  formatAndil,
+  formatIndex,
+  formatNK,
+  formatNKCompact,
+  formatNumber,
+  formatSignedPct,
+} from '../utils/formatters';
 import { exportSingleRegionWorkbook } from '../utils/excelExporter';
 
 interface LembarKerjaViewProps {
@@ -397,21 +404,35 @@ export const LembarKerjaView: React.FC<LembarKerjaViewProps> = ({
 
       {/* Main LK Data Table */}
       <div className="rounded-lg border border-slate-200 bg-white overflow-hidden">
-        <div className="overflow-x-auto max-h-[68vh]">
-          <table className="w-full text-left border-collapse text-xs">
+        <div className="overflow-y-auto overflow-x-hidden max-h-[70vh]">
+          <table className="w-full table-fixed text-left border-collapse text-[11px]">
+            <colgroup>
+              <col className="w-[7%]" />
+              <col className="w-[22%]" />
+              <col className="w-[7.5%]" />
+              <col className="w-[8.5%]" />
+              <col className="w-[7.5%]" />
+              <col className="w-[6.5%]" />
+              <col className="w-[6.5%]" />
+              <col className="w-[8%]" />
+              <col className="w-[6.5%]" />
+              <col className="w-[6.5%]" />
+              <col className="w-[6.5%]" />
+              <col className="w-[7%]" />
+            </colgroup>
             <thead className="sticky top-0 z-20 bg-slate-100 border-b border-slate-300">
-              <tr className="text-[11px] font-bold text-slate-800 select-none">
+              <tr className="text-[10.5px] font-bold text-slate-800 select-none leading-tight">
                 <th
                   onClick={() => toggleSort('KODE')}
-                  className="py-2.5 px-3 whitespace-nowrap border-r border-slate-200 bg-slate-100 cursor-pointer hover:bg-slate-200/70"
+                  className="py-2 px-1.5 border-r border-slate-200 bg-slate-100 cursor-pointer hover:bg-slate-200/70 align-middle"
                 >
-                  <span className="inline-flex items-center gap-1">
+                  <span className="inline-flex items-center gap-0.5">
                     Kode {renderSortIcon('KODE')}
                   </span>
                 </th>
                 <th
                   onClick={() => toggleSort('NAMA')}
-                  className="py-2.5 px-3 min-w-[260px] border-r border-slate-200 bg-slate-100 cursor-pointer hover:bg-slate-200/70"
+                  className="py-2 px-2 border-r border-slate-200 bg-slate-100 cursor-pointer hover:bg-slate-200/70 align-middle"
                 >
                   <span className="inline-flex items-center gap-1">
                     Komoditas / Hierarki {renderSortIcon('NAMA')}
@@ -419,121 +440,153 @@ export const LembarKerjaView: React.FC<LembarKerjaViewProps> = ({
                 </th>
                 <th
                   onClick={() => toggleSort('NK0')}
-                  className="py-2.5 px-3 text-right whitespace-nowrap bg-slate-100 cursor-pointer hover:bg-slate-200/70"
+                  className="py-2 px-1.5 text-right bg-slate-100 cursor-pointer hover:bg-slate-200/70 align-middle"
+                  title="NK0 = SBH2022 (Bobot Dasar)"
                 >
-                  <span className="inline-flex items-center justify-end gap-1">
-                    NK0 = SBH {renderSortIcon('NK0')}
+                  <span className="inline-flex items-center justify-end gap-0.5">
+                    NK0 {renderSortIcon('NK0')}
                   </span>
-                  <span className="block text-[9px] font-normal text-slate-500">Bobot Dasar</span>
+                  <span className="block text-[9px] font-normal text-slate-500 truncate">SBH2022</span>
                 </th>
                 <th
                   onClick={() => toggleSort('NK_PREV')}
-                  className="py-2.5 px-3 text-right whitespace-nowrap bg-sky-50 border-x border-sky-200 text-sky-900 cursor-pointer hover:bg-sky-100/70"
+                  className="py-2 px-1.5 text-right bg-sky-50 border-x border-sky-200 text-sky-900 cursor-pointer hover:bg-sky-100/70 align-middle"
+                  title={`NK (${prevMonth})`}
                 >
-                  <span className="inline-flex items-center justify-end gap-1">
-                    NK ({prevMonth}) {renderSortIcon('NK_PREV')}
+                  <span className="inline-flex items-center justify-end gap-0.5">
+                    NK(N-1) {renderSortIcon('NK_PREV')}
                   </span>
-                  <span className="block text-[9px] font-semibold text-sky-700">
-                    {isReadOnly ? 'AGREGAT N-1' : 'INPUT N-1'}
+                  <span className="block text-[9px] font-semibold text-sky-700 truncate">
+                    {prevMonth.slice(0, 3)}
                   </span>
                 </th>
                 <th
                   onClick={() => toggleSort('NK_CURR')}
-                  className="py-2.5 px-3 text-right whitespace-nowrap bg-slate-100 cursor-pointer hover:bg-slate-200/70"
+                  className="py-2 px-1.5 text-right bg-slate-100 cursor-pointer hover:bg-slate-200/70 align-middle"
+                  title={`NK (${currMonth}) = NK(N-1) × RH / 100`}
                 >
-                  <span className="inline-flex items-center justify-end gap-1">
-                    NK ({currMonth}) {renderSortIcon('NK_CURR')}
+                  <span className="inline-flex items-center justify-end gap-0.5">
+                    NK(N) {renderSortIcon('NK_CURR')}
                   </span>
-                  <span className="block text-[9px] font-normal text-slate-500">Rumus NK×RH/100</span>
+                  <span className="block text-[9px] font-normal text-slate-500 truncate">
+                    {currMonth.slice(0, 3)}
+                  </span>
                 </th>
                 <th
                   onClick={() => toggleSort('PCT_PREV')}
-                  className="py-2.5 px-2.5 text-right whitespace-nowrap bg-slate-100 cursor-pointer hover:bg-slate-200/70"
+                  className="py-2 px-1.5 text-right bg-slate-100 cursor-pointer hover:bg-slate-200/70 align-middle"
+                  title={`%NK ${prevMonth}`}
                 >
-                  <span className="inline-flex items-center justify-end gap-1">
-                    %NK {prevMonth} {renderSortIcon('PCT_PREV')}
+                  <span className="inline-flex items-center justify-end gap-0.5">
+                    %NK {renderSortIcon('PCT_PREV')}
                   </span>
+                  <span className="block text-[9px] font-normal text-slate-500">N-1</span>
                 </th>
                 <th
                   onClick={() => toggleSort('PCT_CURR')}
-                  className="py-2.5 px-2.5 text-right whitespace-nowrap bg-slate-100 cursor-pointer hover:bg-slate-200/70"
+                  className="py-2 px-1.5 text-right bg-slate-100 cursor-pointer hover:bg-slate-200/70 align-middle"
+                  title={`%NK ${currMonth}`}
                 >
-                  <span className="inline-flex items-center justify-end gap-1">
-                    %NK {currMonth} {renderSortIcon('PCT_CURR')}
+                  <span className="inline-flex items-center justify-end gap-0.5">
+                    %NK {renderSortIcon('PCT_CURR')}
                   </span>
+                  <span className="block text-[9px] font-normal text-slate-500">N</span>
                 </th>
                 <th
                   onClick={() => toggleSort('RH')}
-                  className="py-2.5 px-3 text-right whitespace-nowrap bg-amber-50 border-x border-amber-200 text-amber-900 cursor-pointer hover:bg-amber-100/70"
+                  className="py-2 px-1.5 text-right bg-amber-50 border-x border-amber-200 text-amber-900 cursor-pointer hover:bg-amber-100/70 align-middle"
+                  title={`RH (${currMonth})`}
                 >
-                  <span className="inline-flex items-center justify-end gap-1">
-                    RH ({currMonth}) {renderSortIcon('RH')}
+                  <span className="inline-flex items-center justify-end gap-0.5">
+                    RH(N) {renderSortIcon('RH')}
                   </span>
-                  <span className="block text-[9px] font-semibold text-amber-700">
-                    {isReadOnly ? 'TERTIMBANG' : 'INPUT RH (N)'}
+                  <span className="block text-[9px] font-semibold text-amber-700 truncate">
+                    {isReadOnly ? 'TIMBANG' : currMonth.slice(0, 3)}
                   </span>
                 </th>
                 <th
                   onClick={() => toggleSort('ANDIL')}
-                  className="py-2.5 px-2.5 text-right whitespace-nowrap bg-slate-100 cursor-pointer hover:bg-slate-200/70"
+                  className="py-2 px-1.5 text-right bg-slate-100 cursor-pointer hover:bg-slate-200/70 align-middle"
                 >
-                  <span className="inline-flex items-center justify-end gap-1">
-                    Andil (%) {renderSortIcon('ANDIL')}
+                  <span className="inline-flex items-center justify-end gap-0.5">
+                    Andil {renderSortIcon('ANDIL')}
                   </span>
+                  <span className="block text-[9px] font-normal text-slate-500">(%)</span>
                 </th>
                 <th
                   onClick={() => toggleSort('IHK_PREV')}
-                  className="py-2.5 px-2.5 text-right whitespace-nowrap bg-slate-100 cursor-pointer hover:bg-slate-200/70"
+                  className="py-2 px-1.5 text-right bg-slate-100 cursor-pointer hover:bg-slate-200/70 align-middle"
+                  title={`IHK ${prevMonth}`}
                 >
-                  <span className="inline-flex items-center justify-end gap-1">
-                    IHK {prevMonth} {renderSortIcon('IHK_PREV')}
+                  <span className="inline-flex items-center justify-end gap-0.5">
+                    IHK {renderSortIcon('IHK_PREV')}
                   </span>
+                  <span className="block text-[9px] font-normal text-slate-500">N-1</span>
                 </th>
                 <th
                   onClick={() => toggleSort('IHK_CURR')}
-                  className="py-2.5 px-2.5 text-right whitespace-nowrap bg-slate-100 cursor-pointer hover:bg-slate-200/70"
+                  className="py-2 px-1.5 text-right bg-slate-100 cursor-pointer hover:bg-slate-200/70 align-middle"
+                  title={`IHK ${currMonth}`}
                 >
-                  <span className="inline-flex items-center justify-end gap-1">
-                    IHK {currMonth} {renderSortIcon('IHK_CURR')}
+                  <span className="inline-flex items-center justify-end gap-0.5">
+                    IHK {renderSortIcon('IHK_CURR')}
                   </span>
+                  <span className="block text-[9px] font-normal text-slate-500">N</span>
                 </th>
                 <th
                   onClick={() => toggleSort('INFLASI')}
-                  className="py-2.5 px-3 text-right whitespace-nowrap bg-slate-100 cursor-pointer hover:bg-slate-200/70"
+                  className="py-2 px-1.5 text-right bg-slate-100 cursor-pointer hover:bg-slate-200/70 align-middle"
                 >
-                  <span className="inline-flex items-center justify-end gap-1">
-                    Inflasi (%) {renderSortIcon('INFLASI')}
+                  <span className="inline-flex items-center justify-end gap-0.5">
+                    Inflasi {renderSortIcon('INFLASI')}
                   </span>
+                  <span className="block text-[9px] font-normal text-slate-500">(%)</span>
                 </th>
               </tr>
 
               {/* Pinned Row 1 TOTAL / UMUM Summary */}
-              <tr className="bg-slate-900 text-white font-mono text-[11px] border-t border-slate-700">
-                <td className="py-2 px-3 border-r border-slate-700">0</td>
-                <td className="py-2 px-3 font-sans font-bold border-r border-slate-700">
+              <tr className="bg-slate-900 text-white font-mono text-[10.5px] border-t border-slate-700">
+                <td className="py-2 px-1.5 border-r border-slate-700">0</td>
+                <td
+                  className="py-2 px-2 font-sans font-bold border-r border-slate-700 truncate"
+                  title={`TOTAL / UMUM — ${lk.regionName.toUpperCase()}`}
+                >
                   TOTAL / UMUM — {lk.regionName.toUpperCase()}
                 </td>
-                <td className="py-2 px-3 text-right tabular-nums">{formatNK(lk.umum.nk0)}</td>
-                <td className="py-2 px-3 text-right tabular-nums bg-slate-800 border-x border-slate-700">
-                  {formatNK(lk.umum.nkPrev)}
+                <td
+                  className="py-2 px-1.5 text-right tabular-nums truncate"
+                  title={`Rp ${formatNK(lk.umum.nk0)}`}
+                >
+                  {formatNKCompact(lk.umum.nk0)}
                 </td>
-                <td className="py-2 px-3 text-right tabular-nums">{formatNK(lk.umum.nkCurrent)}</td>
-                <td className="py-2 px-2.5 text-right tabular-nums">100,00</td>
-                <td className="py-2 px-2.5 text-right tabular-nums">100,00</td>
-                <td className="py-2 px-3 text-right tabular-nums bg-slate-800 border-x border-slate-700">
-                  {formatNumber(lk.umum.rhCurrent, 4)}
+                <td
+                  className="py-2 px-1.5 text-right tabular-nums bg-slate-800 border-x border-slate-700 truncate"
+                  title={`Rp ${formatNK(lk.umum.nkPrev)}`}
+                >
+                  {formatNKCompact(lk.umum.nkPrev)}
                 </td>
-                <td className="py-2 px-2.5 text-right tabular-nums">
+                <td
+                  className="py-2 px-1.5 text-right tabular-nums truncate"
+                  title={`Rp ${formatNK(lk.umum.nkCurrent)}`}
+                >
+                  {formatNKCompact(lk.umum.nkCurrent)}
+                </td>
+                <td className="py-2 px-1.5 text-right tabular-nums">100,00</td>
+                <td className="py-2 px-1.5 text-right tabular-nums">100,00</td>
+                <td className="py-2 px-1.5 text-right tabular-nums bg-slate-800 border-x border-slate-700">
+                  {formatNumber(lk.umum.rhCurrent, 3)}
+                </td>
+                <td className="py-2 px-1.5 text-right tabular-nums">
                   {formatAndil(lk.umum.andilInflasi, 4)}
                 </td>
-                <td className="py-2 px-2.5 text-right tabular-nums">
+                <td className="py-2 px-1.5 text-right tabular-nums">
                   {formatIndex(lk.umum.ihkPrev, 2)}
                 </td>
-                <td className="py-2 px-2.5 text-right tabular-nums">
+                <td className="py-2 px-1.5 text-right tabular-nums">
                   {formatIndex(lk.umum.ihkCurrent, 2)}
                 </td>
-                <td className="py-2 px-3 text-right tabular-nums font-bold">
-                  {formatSignedPct(lk.umum.inflasi, 4)}
+                <td className="py-2 px-1.5 text-right tabular-nums font-bold">
+                  {formatSignedPct(lk.umum.inflasi, 3)}
                 </td>
               </tr>
             </thead>
@@ -555,28 +608,31 @@ export const LembarKerjaView: React.FC<LembarKerjaViewProps> = ({
 
                   return (
                     <tr key={row.kode} className={`${rowStyle(row.flag)} transition-colors`}>
-                      <td className="py-2 px-3 font-mono text-[11px] text-slate-500 border-r border-slate-100 whitespace-nowrap">
+                      <td className="py-1.5 px-1.5 font-mono text-[10.5px] text-slate-500 border-r border-slate-100 truncate">
                         {row.kode}
                       </td>
-                      <td className="py-2 px-3 border-r border-slate-100">
-                        <div className="flex items-center gap-2">
+                      <td
+                        className="py-1.5 px-2 border-r border-slate-100"
+                        title={`${row.nama}${row.kuesioner ? ` (${row.kuesioner})` : ''}`}
+                      >
+                        <div className="flex items-center gap-1.5 min-w-0">
                           <span
-                            className={
+                            className={`truncate ${
                               sortKey === 'DEFAULT'
                                 ? row.flag === 1
                                   ? 'uppercase tracking-tight'
                                   : row.flag === 2
-                                  ? 'pl-2'
-                                  : 'pl-4'
+                                  ? 'pl-1.5'
+                                  : 'pl-3'
                                 : row.flag === 1
                                 ? 'uppercase tracking-tight'
                                 : ''
-                            }
+                            }`}
                           >
                             {row.nama}
                           </span>
                           {row.kuesioner && isCommodity && (
-                            <span className="text-[10px] font-mono text-slate-400 shrink-0">
+                            <span className="text-[9.5px] font-mono text-slate-400 shrink-0">
                               {row.kuesioner}
                             </span>
                           )}
@@ -584,14 +640,18 @@ export const LembarKerjaView: React.FC<LembarKerjaViewProps> = ({
                       </td>
 
                       {/* NK0 */}
-                      <td className="py-2 px-3 text-right font-mono tabular-nums text-slate-600 whitespace-nowrap">
-                        {formatNK(row.nk0)}
+                      <td
+                        className="py-1.5 px-1.5 text-right font-mono tabular-nums text-slate-600 truncate"
+                        title={`Rp ${formatNK(row.nk0)}`}
+                      >
+                        {formatNKCompact(row.nk0)}
                       </td>
 
                       {/* NK (N-1) Dynamic Input Cell */}
                       <td
                         onClick={() => !isEditingNk && startEdit(row, 'nkPrev')}
-                        className={`py-1.5 px-3 text-right font-mono tabular-nums border-x border-sky-100 whitespace-nowrap ${
+                        title={`Rp ${formatNK(row.nkPrev)}${isCommodity && !isReadOnly ? ' — Klik untuk ubah' : ''}`}
+                        className={`py-1 px-1.5 text-right font-mono tabular-nums border-x border-sky-100 ${
                           isCommodity && !isReadOnly
                             ? 'bg-sky-50/40 hover:bg-sky-50 cursor-pointer text-slate-900'
                             : 'bg-sky-50/20 text-slate-700'
@@ -610,37 +670,41 @@ export const LembarKerjaView: React.FC<LembarKerjaViewProps> = ({
                               if (e.key === 'Enter') commitEdit();
                               if (e.key === 'Escape') setEditingCell(null);
                             }}
-                            className="w-32 rounded border border-sky-500 bg-white px-1.5 py-0.5 text-right text-xs font-mono focus:outline-none"
+                            className="w-full min-w-0 rounded border border-sky-500 bg-white px-1 py-0.5 text-right text-[11px] font-mono focus:outline-none"
                           />
                         ) : (
-                          <span className="inline-flex items-center gap-1 justify-end">
-                            {formatNK(row.nkPrev)}
+                          <span className="inline-flex items-center gap-0.5 justify-end w-full truncate">
+                            <span className="truncate">{formatNKCompact(row.nkPrev)}</span>
                             {isCommodity && !isReadOnly && (
-                              <Edit3 className="h-2.5 w-2.5 text-sky-500 opacity-50" />
+                              <Edit3 className="h-2.5 w-2.5 text-sky-500 opacity-50 shrink-0" />
                             )}
                           </span>
                         )}
                       </td>
 
                       {/* NK (N) Formula */}
-                      <td className="py-2 px-3 text-right font-mono tabular-nums whitespace-nowrap">
-                        {formatNK(row.nkCurrent)}
+                      <td
+                        className="py-1.5 px-1.5 text-right font-mono tabular-nums truncate"
+                        title={`Rp ${formatNK(row.nkCurrent)}`}
+                      >
+                        {formatNKCompact(row.nkCurrent)}
                       </td>
 
                       {/* %NK Prev */}
-                      <td className="py-2 px-2.5 text-right font-mono tabular-nums text-slate-600 whitespace-nowrap">
-                        {formatNumber(row.pctNkPrev, 3)}
+                      <td className="py-1.5 px-1.5 text-right font-mono tabular-nums text-slate-600 truncate">
+                        {formatNumber(row.pctNkPrev, 2)}
                       </td>
 
                       {/* %NK Curr */}
-                      <td className="py-2 px-2.5 text-right font-mono tabular-nums text-slate-600 whitespace-nowrap">
-                        {formatNumber(row.pctNkCurrent, 3)}
+                      <td className="py-1.5 px-1.5 text-right font-mono tabular-nums text-slate-600 truncate">
+                        {formatNumber(row.pctNkCurrent, 2)}
                       </td>
 
                       {/* RH (N) Dynamic Input Cell */}
                       <td
                         onClick={() => !isEditingRh && startEdit(row, 'rhCurrent')}
-                        className={`py-1.5 px-3 text-right font-mono tabular-nums border-x border-amber-100 whitespace-nowrap ${
+                        title={`${formatNumber(row.rhCurrent, 6)}${isCommodity && !isReadOnly ? ' — Klik untuk ubah' : ''}`}
+                        className={`py-1 px-1.5 text-right font-mono tabular-nums border-x border-amber-100 ${
                           isCommodity && !isReadOnly
                             ? 'bg-amber-50/40 hover:bg-amber-50 cursor-pointer text-slate-900 font-medium'
                             : 'bg-amber-50/20 text-slate-700'
@@ -659,13 +723,13 @@ export const LembarKerjaView: React.FC<LembarKerjaViewProps> = ({
                               if (e.key === 'Enter') commitEdit();
                               if (e.key === 'Escape') setEditingCell(null);
                             }}
-                            className="w-24 rounded border border-amber-500 bg-white px-1.5 py-0.5 text-right text-xs font-mono focus:outline-none"
+                            className="w-full min-w-0 rounded border border-amber-500 bg-white px-1 py-0.5 text-right text-[11px] font-mono focus:outline-none"
                           />
                         ) : (
-                          <span className="inline-flex items-center gap-1 justify-end">
-                            {formatNumber(row.rhCurrent, 4)}
+                          <span className="inline-flex items-center gap-0.5 justify-end w-full truncate">
+                            <span className="truncate">{formatNumber(row.rhCurrent, 3)}</span>
                             {isCommodity && !isReadOnly && (
-                              <Edit3 className="h-2.5 w-2.5 text-amber-600 opacity-50" />
+                              <Edit3 className="h-2.5 w-2.5 text-amber-600 opacity-50 shrink-0" />
                             )}
                           </span>
                         )}
@@ -673,7 +737,7 @@ export const LembarKerjaView: React.FC<LembarKerjaViewProps> = ({
 
                       {/* Andil Inflasi */}
                       <td
-                        className={`py-2 px-2.5 text-right font-mono tabular-nums whitespace-nowrap ${inflasiColor(
+                        className={`py-1.5 px-1.5 text-right font-mono tabular-nums truncate ${inflasiColor(
                           row.andilInflasi
                         )}`}
                       >
@@ -681,22 +745,22 @@ export const LembarKerjaView: React.FC<LembarKerjaViewProps> = ({
                       </td>
 
                       {/* IHK Prev */}
-                      <td className="py-2 px-2.5 text-right font-mono tabular-nums text-slate-600 whitespace-nowrap">
+                      <td className="py-1.5 px-1.5 text-right font-mono tabular-nums text-slate-600 truncate">
                         {formatIndex(row.ihkPrev, 2)}
                       </td>
 
                       {/* IHK Curr */}
-                      <td className="py-2 px-2.5 text-right font-mono tabular-nums text-slate-800 whitespace-nowrap">
+                      <td className="py-1.5 px-1.5 text-right font-mono tabular-nums text-slate-800 truncate">
                         {formatIndex(row.ihkCurrent, 2)}
                       </td>
 
                       {/* Inflasi */}
                       <td
-                        className={`py-2 px-3 text-right font-mono tabular-nums font-semibold whitespace-nowrap ${inflasiColor(
+                        className={`py-1.5 px-1.5 text-right font-mono tabular-nums font-semibold truncate ${inflasiColor(
                           row.inflasi
                         )}`}
                       >
-                        {formatSignedPct(row.inflasi, 3)}
+                        {formatSignedPct(row.inflasi, 2)}
                       </td>
                     </tr>
                   );

@@ -17,8 +17,10 @@ import type {
 import { buildInitialKabKotaInputs, DEFAULT_PERIOD, KAB_KOTA_CODES } from '../data/regions';
 import { calculateAllRegions } from '../utils/calculationEngine';
 import {
+  applyAnnotationsToDataset,
   clearRespondentDatasets,
   loadRespondentDatasets,
+  saveObservationAnnotation,
   saveRespondentDatasets,
 } from '../utils/respondentStorage';
 import { isSupabaseConfigured, type SupabaseConnectionStatus } from '../lib/supabase';
@@ -57,7 +59,7 @@ function normalizeRespondentDatasetsMap(
   for (const [key, val] of Object.entries(rawDs)) {
     if (!val) continue;
     const scopedKey = key.includes('_') ? key : `${val.regionCode}_${val.frequency}`;
-    normalized[scopedKey] = val;
+    normalized[scopedKey] = applyAnnotationsToDataset(val);
   }
   return normalized;
 }
@@ -291,10 +293,14 @@ export function useInflationStore() {
 
       if (respResult !== null) {
         respondentHydratedRef.current = true;
+        const annotatedResp: Record<string, RespondentRHDataset> = {};
+        for (const [k, ds] of Object.entries(respResult)) {
+          annotatedResp[k] = applyAnnotationsToDataset(ds);
+        }
         setRespondentDatasetsState((prev) => {
-          if (Object.keys(respResult).length > 0) {
+          if (Object.keys(annotatedResp).length > 0) {
             // Merge active period datasets fetched from Supabase
-            return isPeriodSwitch ? respResult : { ...prev, ...respResult };
+            return isPeriodSwitch ? annotatedResp : { ...prev, ...annotatedResp };
           }
           return isPeriodSwitch ? {} : prev;
         });
@@ -681,6 +687,44 @@ export function useInflationStore() {
     []
   );
 
+  const updateRespondentAnnotation = useCallback(
+    (
+      regionCode: KabKotaCode,
+      frequency: RespondentFrequency,
+      observationId: string,
+      patch: { catatan?: string; perluPerbaikan?: boolean }
+    ) => {
+      const scopedKey = `${regionCode}_${frequency}`;
+      respondentHydratedRef.current = true;
+      setRespondentDatasetsState((prev) => {
+        const ds = prev[scopedKey];
+        if (!ds) return prev;
+        let updatedTarget: typeof ds.observations[number] | null = null;
+        const nextObservations = ds.observations.map((obs) => {
+          if (obs.id !== observationId) return obs;
+          updatedTarget = {
+            ...obs,
+            catatan: patch.catatan !== undefined ? patch.catatan : obs.catatan,
+            perluPerbaikan:
+              patch.perluPerbaikan !== undefined ? patch.perluPerbaikan : obs.perluPerbaikan,
+          };
+          return updatedTarget;
+        });
+        if (updatedTarget) {
+          saveObservationAnnotation(ds.period, regionCode, frequency, updatedTarget, patch);
+        }
+        return {
+          ...prev,
+          [scopedKey]: {
+            ...ds,
+            observations: nextObservations,
+          },
+        };
+      });
+    },
+    []
+  );
+
   const resetToInitialData = useCallback(() => {
     const fresh = createInitialState();
     setState(fresh);
@@ -710,6 +754,7 @@ export function useInflationStore() {
     updateCommodityInput,
     rolloverPrevMonthNK,
     setRespondentDataset,
+    updateRespondentAnnotation,
     resetToInitialData,
     refreshFromSupabase: () => refreshFromSupabase(stateRef.current.period, false),
   };

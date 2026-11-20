@@ -1101,13 +1101,21 @@ export const UpdateDataView: React.FC<UpdateDataViewProps> = ({
                 </span>
               </div>
 
-              <div className="overflow-x-auto max-h-72 border border-slate-200 rounded-md">
-                <table className="w-full text-left border-collapse text-xs">
+              <div className="overflow-y-auto overflow-x-hidden max-h-72 border border-slate-200 rounded-md">
+                <table className="w-full table-fixed text-left border-collapse text-[11px]">
+                  <colgroup>
+                    <col className="w-[11%]" />
+                    <col className="w-[35%]" />
+                    <col className="w-[14%]" />
+                    <col className="w-[13%]" />
+                    <col className="w-[13%]" />
+                    <col className="w-[14%]" />
+                  </colgroup>
                   <thead className="sticky top-0 bg-slate-100 border-b border-slate-200 text-[11px] font-bold text-slate-700 select-none">
                     <tr>
                       <th
                         onClick={() => togglePreviewSort('KODE')}
-                        className="py-2 px-3 cursor-pointer hover:bg-slate-200/70 whitespace-nowrap"
+                        className="py-2 px-2.5 cursor-pointer hover:bg-slate-200/70"
                       >
                         <span className="inline-flex items-center gap-1">
                           Kode {renderPreviewSortIcon('KODE')}
@@ -1115,7 +1123,7 @@ export const UpdateDataView: React.FC<UpdateDataViewProps> = ({
                       </th>
                       <th
                         onClick={() => togglePreviewSort('NAMA')}
-                        className="py-2 px-3 cursor-pointer hover:bg-slate-200/70"
+                        className="py-2 px-2.5 cursor-pointer hover:bg-slate-200/70"
                       >
                         <span className="inline-flex items-center gap-1">
                           Komoditas {renderPreviewSortIcon('NAMA')}
@@ -1123,7 +1131,7 @@ export const UpdateDataView: React.FC<UpdateDataViewProps> = ({
                       </th>
                       <th
                         onClick={() => togglePreviewSort('STATUS')}
-                        className="py-2 px-3 cursor-pointer hover:bg-slate-200/70 whitespace-nowrap"
+                        className="py-2 px-2.5 cursor-pointer hover:bg-slate-200/70"
                       >
                         <span className="inline-flex items-center gap-1">
                           Status {renderPreviewSortIcon('STATUS')}
@@ -1131,7 +1139,7 @@ export const UpdateDataView: React.FC<UpdateDataViewProps> = ({
                       </th>
                       <th
                         onClick={() => togglePreviewSort('OLD')}
-                        className="py-2 px-3 text-right cursor-pointer hover:bg-slate-200/70 whitespace-nowrap"
+                        className="py-2 px-2.5 text-right cursor-pointer hover:bg-slate-200/70"
                       >
                         <span className="inline-flex items-center justify-end gap-1">
                           Nilai Lama {renderPreviewSortIcon('OLD')}
@@ -1139,7 +1147,7 @@ export const UpdateDataView: React.FC<UpdateDataViewProps> = ({
                       </th>
                       <th
                         onClick={() => togglePreviewSort('NEW')}
-                        className="py-2 px-3 text-right cursor-pointer hover:bg-slate-200/70 whitespace-nowrap"
+                        className="py-2 px-2.5 text-right cursor-pointer hover:bg-slate-200/70"
                       >
                         <span className="inline-flex items-center justify-end gap-1">
                           Nilai Baru {renderPreviewSortIcon('NEW')}
@@ -1147,7 +1155,7 @@ export const UpdateDataView: React.FC<UpdateDataViewProps> = ({
                       </th>
                       <th
                         onClick={() => togglePreviewSort('DIFF')}
-                        className="py-2 px-3 text-right cursor-pointer hover:bg-slate-200/70 whitespace-nowrap"
+                        className="py-2 px-2.5 text-right cursor-pointer hover:bg-slate-200/70"
                       >
                         <span className="inline-flex items-center justify-end gap-1">
                           Selisih {renderPreviewSortIcon('DIFF')}
@@ -1165,9 +1173,11 @@ export const UpdateDataView: React.FC<UpdateDataViewProps> = ({
                     ) : (
                       previewChanges.slice(0, 120).map((c) => (
                         <tr key={`${c.kode}-${c.pakomStatus ?? ''}`} className="hover:bg-slate-50">
-                          <td className="py-1.5 px-3 font-mono text-slate-500">{c.kode}</td>
-                          <td className="py-1.5 px-3 font-medium text-slate-800">{c.nama}</td>
-                          <td className="py-1.5 px-3 font-mono text-[11px]">
+                          <td className="py-1.5 px-2.5 font-mono text-slate-500 truncate">{c.kode}</td>
+                          <td className="py-1.5 px-2.5 font-medium text-slate-800 truncate" title={c.nama}>
+                            {c.nama}
+                          </td>
+                          <td className="py-1.5 px-2.5 font-mono text-[10.5px] truncate">
                             {c.pakomStatus ? (
                               <span
                                 className={
@@ -1186,18 +1196,18 @@ export const UpdateDataView: React.FC<UpdateDataViewProps> = ({
                               <span className="text-slate-500">{c.matchedBy}</span>
                             )}
                           </td>
-                          <td className="py-1.5 px-3 text-right font-mono tabular-nums text-slate-600">
+                          <td className="py-1.5 px-2.5 text-right font-mono tabular-nums text-slate-600 truncate">
                             {c.oldValue !== null
                               ? formatNumber(c.oldValue, activeMapping.kind === 'RH_CURRENT' ? 4 : 2)
                               : '—'}
                           </td>
-                          <td className="py-1.5 px-3 text-right font-mono tabular-nums font-semibold text-slate-900">
+                          <td className="py-1.5 px-2.5 text-right font-mono tabular-nums font-semibold text-slate-900 truncate">
                             {c.pakomStatus === 'DIHAPUS'
                               ? 'Dihapus'
                               : formatNumber(c.newValue, activeMapping.kind === 'RH_CURRENT' ? 4 : 2)}
                           </td>
                           <td
-                            className={`py-1.5 px-3 text-right font-mono tabular-nums font-semibold ${
+                            className={`py-1.5 px-2.5 text-right font-mono tabular-nums font-semibold truncate ${
                               c.diff > 0
                                 ? 'text-rose-700'
                                 : c.diff < 0

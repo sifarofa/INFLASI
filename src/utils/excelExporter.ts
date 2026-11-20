@@ -321,6 +321,8 @@ export function exportRespondentAnalysisWorkbook(
       'Rata2 Geometri N',
       'RH Responden',
       'Perubahan (%)',
+      'Status Perbaikan',
+      'Catatan',
     ],
     ...observations.map((o) => [
       o.kodeKomoditas,
@@ -337,6 +339,8 @@ export function exportRespondentAnalysisWorkbook(
       o.currAvgPrice ? Number(o.currAvgPrice.toFixed(2)) : '',
       o.priceRelative ? Number(o.priceRelative.toFixed(4)) : '',
       o.priceRelative ? Number((o.priceRelative - 100).toFixed(4)) : '',
+      o.perluPerbaikan ? 'PERLU PERBAIKAN' : 'Normal',
+      o.catatan ?? '',
     ]),
   ];
 

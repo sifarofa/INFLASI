@@ -51,6 +51,7 @@ export default function App() {
     updateCommodityInput,
     rolloverPrevMonthNK,
     setRespondentDataset,
+    updateRespondentAnnotation,
     resetToInitialData,
   } = useInflationStore();
 
@@ -569,7 +570,7 @@ export default function App() {
         )}
 
         {/* Main Viewport */}
-        <main className="mx-auto max-w-[1440px] w-full flex-1 px-4 sm:px-6 py-6">
+        <main className="w-full flex-1 px-3 sm:px-5 py-5">
           {safeTab === 'dashboard' && (
             <DashboardView
               results={results}
@@ -622,6 +623,7 @@ export default function App() {
               userRole={session.role}
               allowedRegion={session.regionCode}
               onSetDataset={setRespondentDataset}
+              onUpdateObservationAnnotation={updateRespondentAnnotation}
               onApplyCalculatedRhToLK={
                 isProvinsi
                   ? (regionCode, rhUpdates, sourceLabel) =>

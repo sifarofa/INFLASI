@@ -952,49 +952,64 @@ export const AngkaSementaraRankingView: React.FC = () => {
                       Tidak ada data Kab/Kota Kalbar untuk komoditas ini pada file yang diunggah.
                     </div>
                   ) : (
-                    <div className="overflow-x-auto rounded-lg border border-slate-200">
-                      <table className="w-full text-left border-collapse text-xs">
+                    <div className="overflow-y-auto overflow-x-hidden rounded-lg border border-slate-200">
+                      <table className="w-full table-fixed text-left border-collapse text-[11px]">
+                        <colgroup>
+                          <col className="w-[9%]" />
+                          <col className="w-[9%]" />
+                          <col className="w-[7%]" />
+                          <col className="w-[19%]" />
+                          <col className="w-[13%]" />
+                          <col className="w-[8%]" />
+                          <col className="w-[9%]" />
+                          <col className="w-[9%]" />
+                          <col className="w-[8.5%]" />
+                          <col className="w-[8.5%]" />
+                        </colgroup>
                         <thead>
-                          <tr className="border-b border-slate-200 bg-slate-50 text-slate-600">
-                            <th className="py-2.5 px-3 font-semibold whitespace-nowrap">Rank Kab/Kota (Nas.)</th>
-                            <th className="py-2.5 px-3 font-semibold whitespace-nowrap">Rank Gabungan</th>
-                            <th className="py-2.5 px-3 font-semibold whitespace-nowrap">Kd.Kota</th>
-                            <th className="py-2.5 px-3 font-semibold whitespace-nowrap">Nama Kab/Kota</th>
-                            <th className="py-2.5 px-3 font-semibold whitespace-nowrap">Flag</th>
-                            <th className="py-2.5 px-3 font-semibold text-right whitespace-nowrap">IHK</th>
-                            <th className="py-2.5 px-3 font-semibold text-right whitespace-nowrap">INF(MOM)</th>
-                            <th className="py-2.5 px-3 font-semibold text-right whitespace-nowrap">ANDIL(MOM)</th>
-                            <th className="py-2.5 px-3 font-semibold text-right whitespace-nowrap">INF(YTD)</th>
-                            <th className="py-2.5 px-3 font-semibold text-right whitespace-nowrap">INF(YOY)</th>
+                          <tr className="border-b border-slate-200 bg-slate-50 text-slate-600 leading-tight">
+                            <th className="py-2 px-2 font-semibold">Rank Kab/Kota</th>
+                            <th className="py-2 px-2 font-semibold">Rank All</th>
+                            <th className="py-2 px-2 font-semibold">Kode</th>
+                            <th className="py-2 px-2 font-semibold">Nama Kab/Kota</th>
+                            <th className="py-2 px-2 font-semibold">Flag</th>
+                            <th className="py-2 px-2 font-semibold text-right">IHK</th>
+                            <th className="py-2 px-2 font-semibold text-right">INF(MoM)</th>
+                            <th className="py-2 px-2 font-semibold text-right">Andil</th>
+                            <th className="py-2 px-2 font-semibold text-right">INF(YtD)</th>
+                            <th className="py-2 px-2 font-semibold text-right">INF(YoY)</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-200">
                           {kalbarDetection.kabRows.map((item) => (
                             <tr key={item.row.kdKota} className="bg-amber-50/40 hover:bg-amber-50/80 transition-colors">
-                              <td className="py-2.5 px-3 font-mono font-extrabold text-slate-900 tabular-nums whitespace-nowrap">
+                              <td className="py-2 px-2 font-mono font-extrabold text-slate-900 tabular-nums truncate">
                                 #{item.rankLevel}{' '}
-                                <span className="text-[11px] font-normal text-slate-500">
-                                  / {item.totalLevel}
+                                <span className="text-[10px] font-normal text-slate-500">
+                                  /{item.totalLevel}
                                 </span>
                               </td>
-                              <td className="py-2.5 px-3 font-mono text-slate-700 tabular-nums whitespace-nowrap">
+                              <td className="py-2 px-2 font-mono text-slate-700 tabular-nums truncate">
                                 #{item.rankAll}{' '}
-                                <span className="text-[11px] text-slate-400">
-                                  / {item.totalAll}
+                                <span className="text-[10px] text-slate-400">
+                                  /{item.totalAll}
                                 </span>
                               </td>
-                              <td className="py-2.5 px-3 font-mono font-semibold text-slate-700">
+                              <td className="py-2 px-2 font-mono font-semibold text-slate-700 truncate">
                                 {item.row.kdKota}
                               </td>
-                              <td className="py-2.5 px-3 font-bold text-slate-900 whitespace-nowrap">
+                              <td
+                                className="py-2 px-2 font-bold text-slate-900 truncate"
+                                title={item.row.namaKota}
+                              >
                                 {item.row.namaKota}
                               </td>
-                              <td className="py-2.5 px-3">{renderKalbarFlagTag(item.row.kalbarFlag)}</td>
-                              <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-700">
+                              <td className="py-2 px-2 truncate">{renderKalbarFlagTag(item.row.kalbarFlag)}</td>
+                              <td className="py-2 px-2 text-right font-mono tabular-nums text-slate-700 truncate">
                                 {formatIndex(item.row.ihk, 2)}
                               </td>
                               <td
-                                className={`py-2.5 px-3 text-right font-mono font-extrabold tabular-nums ${
+                                className={`py-2 px-2 text-right font-mono font-extrabold tabular-nums truncate ${
                                   item.row.infMom > 0
                                     ? 'text-rose-700'
                                     : item.row.infMom < 0
@@ -1004,13 +1019,13 @@ export const AngkaSementaraRankingView: React.FC = () => {
                               >
                                 {formatSignedPct(item.row.infMom, 2)}
                               </td>
-                              <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-800">
+                              <td className="py-2 px-2 text-right font-mono tabular-nums text-slate-800 truncate">
                                 {formatAndil(item.row.andilMom, 4)}
                               </td>
-                              <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-700">
+                              <td className="py-2 px-2 text-right font-mono tabular-nums text-slate-700 truncate">
                                 {formatSignedPct(item.row.infYtd, 2)}
                               </td>
-                              <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-700">
+                              <td className="py-2 px-2 text-right font-mono tabular-nums text-slate-700 truncate">
                                 {formatSignedPct(item.row.infYoy, 2)}
                               </td>
                             </tr>
@@ -1099,23 +1114,35 @@ export const AngkaSementaraRankingView: React.FC = () => {
               </div>
             </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse text-xs">
-                <thead>
-                  <tr className="border-b border-slate-200 bg-slate-50 text-slate-600">
-                    <th className="py-2.5 px-3 font-semibold whitespace-nowrap">No.</th>
-                    <th className="py-2.5 px-3 font-semibold whitespace-nowrap">Rank INF(MoM)</th>
-                    <th className="py-2.5 px-3 font-semibold whitespace-nowrap">
+            <div className="overflow-y-auto overflow-x-hidden max-h-[68vh]">
+              <table className="w-full table-fixed text-left border-collapse text-[11px]">
+                <colgroup>
+                  <col className="w-[5%]" />
+                  <col className="w-[9%]" />
+                  <col className="w-[7%]" />
+                  <col className="w-[23%]" />
+                  <col className="w-[14%]" />
+                  <col className="w-[8%]" />
+                  <col className="w-[9%]" />
+                  <col className="w-[8.5%]" />
+                  <col className="w-[8.5%]" />
+                  <col className="w-[8%]" />
+                </colgroup>
+                <thead className="sticky top-0 z-10">
+                  <tr className="border-b border-slate-200 bg-slate-50 text-slate-600 leading-tight">
+                    <th className="py-2 px-2 font-semibold">No.</th>
+                    <th className="py-2 px-2 font-semibold">Rank MoM</th>
+                    <th className="py-2 px-2 font-semibold">
                       <button
                         type="button"
                         onClick={() => handleCrossSort('KODE_KOTA')}
-                        className="inline-flex items-center gap-1 hover:text-slate-900"
+                        className="inline-flex items-center gap-0.5 hover:text-slate-900"
                       >
-                        <span>Kd.Kota</span>
+                        <span>Kode</span>
                         {renderCrossSortIcon('KODE_KOTA')}
                       </button>
                     </th>
-                    <th className="py-2.5 px-3 font-semibold whitespace-nowrap">
+                    <th className="py-2 px-2 font-semibold">
                       <button
                         type="button"
                         onClick={() => handleCrossSort('NAMA_KOTA')}
@@ -1125,54 +1152,54 @@ export const AngkaSementaraRankingView: React.FC = () => {
                         {renderCrossSortIcon('NAMA_KOTA')}
                       </button>
                     </th>
-                    <th className="py-2.5 px-3 font-semibold whitespace-nowrap">Flag Wilayah</th>
-                    <th className="py-2.5 px-3 font-semibold text-right whitespace-nowrap">
+                    <th className="py-2 px-2 font-semibold">Flag</th>
+                    <th className="py-2 px-2 font-semibold text-right">
                       <button
                         type="button"
                         onClick={() => handleCrossSort('IHK')}
-                        className="inline-flex items-center gap-1 hover:text-slate-900"
+                        className="inline-flex items-center gap-0.5 hover:text-slate-900"
                       >
                         <span>IHK</span>
                         {renderCrossSortIcon('IHK')}
                       </button>
                     </th>
-                    <th className="py-2.5 px-3 font-semibold text-right whitespace-nowrap">
+                    <th className="py-2 px-2 font-semibold text-right">
                       <button
                         type="button"
                         onClick={() => handleCrossSort('INF_MOM')}
-                        className="inline-flex items-center gap-1 hover:text-slate-900"
+                        className="inline-flex items-center gap-0.5 hover:text-slate-900"
                       >
-                        <span>INF(MOM)</span>
+                        <span>INF(MoM)</span>
                         {renderCrossSortIcon('INF_MOM')}
                       </button>
                     </th>
-                    <th className="py-2.5 px-3 font-semibold text-right whitespace-nowrap">
+                    <th className="py-2 px-2 font-semibold text-right">
                       <button
                         type="button"
                         onClick={() => handleCrossSort('INF_YTD')}
-                        className="inline-flex items-center gap-1 hover:text-slate-900"
+                        className="inline-flex items-center gap-0.5 hover:text-slate-900"
                       >
-                        <span>INF(YTD)</span>
+                        <span>INF(YtD)</span>
                         {renderCrossSortIcon('INF_YTD')}
                       </button>
                     </th>
-                    <th className="py-2.5 px-3 font-semibold text-right whitespace-nowrap">
+                    <th className="py-2 px-2 font-semibold text-right">
                       <button
                         type="button"
                         onClick={() => handleCrossSort('INF_YOY')}
-                        className="inline-flex items-center gap-1 hover:text-slate-900"
+                        className="inline-flex items-center gap-0.5 hover:text-slate-900"
                       >
-                        <span>INF(YOY)</span>
+                        <span>INF(YoY)</span>
                         {renderCrossSortIcon('INF_YOY')}
                       </button>
                     </th>
-                    <th className="py-2.5 px-3 font-semibold text-right whitespace-nowrap">
+                    <th className="py-2 px-2 font-semibold text-right">
                       <button
                         type="button"
                         onClick={() => handleCrossSort('ANDIL_MOM')}
-                        className="inline-flex items-center gap-1 hover:text-slate-900"
+                        className="inline-flex items-center gap-0.5 hover:text-slate-900"
                       >
-                        <span>ANDIL(MOM)</span>
+                        <span>Andil</span>
                         {renderCrossSortIcon('ANDIL_MOM')}
                       </button>
                     </th>
@@ -1198,27 +1225,30 @@ export const AngkaSementaraRankingView: React.FC = () => {
 
                       return (
                         <tr key={`${row.kdKota}-${row.kode}`} className={`${rowBg} transition-colors`}>
-                          <td className="py-2.5 px-3 font-mono text-slate-500 tabular-nums">
+                          <td className="py-2 px-2 font-mono text-slate-500 tabular-nums">
                             {displayOrder}
                           </td>
-                          <td className="py-2.5 px-3 font-mono font-bold text-slate-900 tabular-nums whitespace-nowrap">
+                          <td className="py-2 px-2 font-mono font-bold text-slate-900 tabular-nums truncate">
                             #{effectiveRank.rank}{' '}
-                            <span className="text-[11px] font-normal text-slate-400">
-                              / {effectiveRank.total}
+                            <span className="text-[10px] font-normal text-slate-400">
+                              /{effectiveRank.total}
                             </span>
                           </td>
-                          <td className="py-2.5 px-3 font-mono font-semibold text-slate-700">
+                          <td className="py-2 px-2 font-mono font-semibold text-slate-700 truncate">
                             {row.kdKota}
                           </td>
-                          <td className="py-2.5 px-3 font-semibold text-slate-900 whitespace-nowrap">
+                          <td
+                            className="py-2 px-2 font-semibold text-slate-900 truncate"
+                            title={row.namaKota}
+                          >
                             {row.namaKota}
                           </td>
-                          <td className="py-2.5 px-3">{renderKalbarFlagTag(row.kalbarFlag)}</td>
-                          <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-700">
+                          <td className="py-2 px-2 truncate">{renderKalbarFlagTag(row.kalbarFlag)}</td>
+                          <td className="py-2 px-2 text-right font-mono tabular-nums text-slate-700 truncate">
                             {formatIndex(row.ihk, 2)}
                           </td>
                           <td
-                            className={`py-2.5 px-3 text-right font-mono font-extrabold tabular-nums ${
+                            className={`py-2 px-2 text-right font-mono font-extrabold tabular-nums truncate ${
                               row.infMom > 0
                                 ? 'text-rose-700'
                                 : row.infMom < 0
@@ -1228,13 +1258,13 @@ export const AngkaSementaraRankingView: React.FC = () => {
                           >
                             {formatSignedPct(row.infMom, 2)}
                           </td>
-                          <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-700">
+                          <td className="py-2 px-2 text-right font-mono tabular-nums text-slate-700 truncate">
                             {formatSignedPct(row.infYtd, 2)}
                           </td>
-                          <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-700">
+                          <td className="py-2 px-2 text-right font-mono tabular-nums text-slate-700 truncate">
                             {formatSignedPct(row.infYoy, 2)}
                           </td>
-                          <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-800">
+                          <td className="py-2 px-2 text-right font-mono tabular-nums text-slate-800 truncate">
                             {formatAndil(row.andilMom, 4)}
                           </td>
                         </tr>
@@ -1363,22 +1393,33 @@ export const AngkaSementaraRankingView: React.FC = () => {
               <span className="tabular-nums">{kalbarCommodityRows.length} item ditampilkan</span>
             </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse text-xs">
-                <thead>
-                  <tr className="border-b border-slate-200 bg-slate-50 text-slate-600">
-                    <th className="py-2.5 px-3 font-semibold whitespace-nowrap">No.</th>
-                    <th className="py-2.5 px-3 font-semibold whitespace-nowrap">
+            <div className="overflow-y-auto overflow-x-hidden max-h-[68vh]">
+              <table className="w-full table-fixed text-left border-collapse text-[11px]">
+                <colgroup>
+                  <col className="w-[5%]" />
+                  <col className="w-[9%]" />
+                  <col className="w-[29%]" />
+                  <col className="w-[8%]" />
+                  <col className="w-[10%]" />
+                  <col className="w-[13%]" />
+                  <col className="w-[9%]" />
+                  <col className="w-[8.5%]" />
+                  <col className="w-[8.5%]" />
+                </colgroup>
+                <thead className="sticky top-0 z-10">
+                  <tr className="border-b border-slate-200 bg-slate-50 text-slate-600 leading-tight">
+                    <th className="py-2 px-2 font-semibold">No.</th>
+                    <th className="py-2 px-2 font-semibold">
                       <button
                         type="button"
                         onClick={() => handleKalbarSort('KODE')}
-                        className="inline-flex items-center gap-1 hover:text-slate-900"
+                        className="inline-flex items-center gap-0.5 hover:text-slate-900"
                       >
                         <span>Kode</span>
                         {renderKalbarSortIcon('KODE')}
                       </button>
                     </th>
-                    <th className="py-2.5 px-3 font-semibold whitespace-nowrap">
+                    <th className="py-2 px-2 font-semibold">
                       <button
                         type="button"
                         onClick={() => handleKalbarSort('NAMA')}
@@ -1388,63 +1429,63 @@ export const AngkaSementaraRankingView: React.FC = () => {
                         {renderKalbarSortIcon('NAMA')}
                       </button>
                     </th>
-                    <th className="py-2.5 px-3 font-semibold text-right whitespace-nowrap">
+                    <th className="py-2 px-2 font-semibold text-right">
                       <button
                         type="button"
                         onClick={() => handleKalbarSort('IHK')}
-                        className="inline-flex items-center gap-1 hover:text-slate-900"
+                        className="inline-flex items-center gap-0.5 hover:text-slate-900"
                       >
                         <span>IHK</span>
                         {renderKalbarSortIcon('IHK')}
                       </button>
                     </th>
-                    <th className="py-2.5 px-3 font-semibold text-right whitespace-nowrap">
+                    <th className="py-2 px-2 font-semibold text-right">
                       <button
                         type="button"
                         onClick={() => handleKalbarSort('INF_MOM')}
-                        className="inline-flex items-center gap-1 hover:text-slate-900"
+                        className="inline-flex items-center gap-0.5 hover:text-slate-900"
                       >
-                        <span>INF(MOM)</span>
+                        <span>INF(MoM)</span>
                         {renderKalbarSortIcon('INF_MOM')}
                       </button>
                     </th>
-                    <th className="py-2.5 px-3 font-semibold text-right whitespace-nowrap">
+                    <th className="py-2 px-2 font-semibold text-right">
                       <button
                         type="button"
                         onClick={() => handleKalbarSort('RANK_NASIONAL')}
-                        className="inline-flex items-center gap-1 hover:text-slate-900"
+                        className="inline-flex items-center gap-0.5 hover:text-slate-900"
                       >
-                        <span>Rank Nasional (INF MoM)</span>
+                        <span>Rank Nas.</span>
                         {renderKalbarSortIcon('RANK_NASIONAL')}
                       </button>
                     </th>
-                    <th className="py-2.5 px-3 font-semibold text-right whitespace-nowrap">
+                    <th className="py-2 px-2 font-semibold text-right">
                       <button
                         type="button"
                         onClick={() => handleKalbarSort('ANDIL_MOM')}
-                        className="inline-flex items-center gap-1 hover:text-slate-900"
+                        className="inline-flex items-center gap-0.5 hover:text-slate-900"
                       >
-                        <span>ANDIL(MOM)</span>
+                        <span>Andil</span>
                         {renderKalbarSortIcon('ANDIL_MOM')}
                       </button>
                     </th>
-                    <th className="py-2.5 px-3 font-semibold text-right whitespace-nowrap">
+                    <th className="py-2 px-2 font-semibold text-right">
                       <button
                         type="button"
                         onClick={() => handleKalbarSort('INF_YTD')}
-                        className="inline-flex items-center gap-1 hover:text-slate-900"
+                        className="inline-flex items-center gap-0.5 hover:text-slate-900"
                       >
-                        <span>INF(YTD)</span>
+                        <span>INF(YtD)</span>
                         {renderKalbarSortIcon('INF_YTD')}
                       </button>
                     </th>
-                    <th className="py-2.5 px-3 font-semibold text-right whitespace-nowrap">
+                    <th className="py-2 px-2 font-semibold text-right">
                       <button
                         type="button"
                         onClick={() => handleKalbarSort('INF_YOY')}
-                        className="inline-flex items-center gap-1 hover:text-slate-900"
+                        className="inline-flex items-center gap-0.5 hover:text-slate-900"
                       >
-                        <span>INF(YOY)</span>
+                        <span>INF(YoY)</span>
                         {renderKalbarSortIcon('INF_YOY')}
                       </button>
                     </th>
@@ -1471,20 +1512,23 @@ export const AngkaSementaraRankingView: React.FC = () => {
                         className="cursor-pointer hover:bg-sky-50/60 transition-colors"
                         title="Klik untuk melihat posisi peringkat nasional komoditas ini"
                       >
-                        <td className="py-2.5 px-3 font-mono text-slate-400 tabular-nums">
+                        <td className="py-2 px-2 font-mono text-slate-400 tabular-nums">
                           {idx + 1}
                         </td>
-                        <td className="py-2.5 px-3 font-mono font-semibold text-slate-700">
+                        <td className="py-2 px-2 font-mono font-semibold text-slate-700 truncate">
                           {row.kode}
                         </td>
-                        <td className="py-2.5 px-3 font-semibold text-slate-900">
+                        <td
+                          className="py-2 px-2 font-semibold text-slate-900 truncate"
+                          title={row.nama}
+                        >
                           {row.nama}
                         </td>
-                        <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-700">
+                        <td className="py-2 px-2 text-right font-mono tabular-nums text-slate-700 truncate">
                           {formatIndex(row.ihk, 2)}
                         </td>
                         <td
-                          className={`py-2.5 px-3 text-right font-mono font-extrabold tabular-nums ${
+                          className={`py-2 px-2 text-right font-mono font-extrabold tabular-nums truncate ${
                             row.infMom > 0
                               ? 'text-rose-700'
                               : row.infMom < 0
@@ -1494,19 +1538,19 @@ export const AngkaSementaraRankingView: React.FC = () => {
                         >
                           {formatSignedPct(row.infMom, 2)}
                         </td>
-                        <td className="py-2.5 px-3 text-right font-mono font-bold text-sky-800 tabular-nums whitespace-nowrap">
+                        <td className="py-2 px-2 text-right font-mono font-bold text-sky-800 tabular-nums truncate">
                           #{rankLevel.rank}{' '}
-                          <span className="text-[11px] font-normal text-slate-400">
-                            / {rankLevel.total} {row.regionLevel === 'PROVINSI' ? 'Prov' : 'Kab/Kota'}
+                          <span className="text-[10px] font-normal text-slate-400">
+                            /{rankLevel.total} {row.regionLevel === 'PROVINSI' ? 'Prov' : 'Kab'}
                           </span>
                         </td>
-                        <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-800">
+                        <td className="py-2 px-2 text-right font-mono tabular-nums text-slate-800 truncate">
                           {formatAndil(row.andilMom, 4)}
                         </td>
-                        <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-700">
+                        <td className="py-2 px-2 text-right font-mono tabular-nums text-slate-700 truncate">
                           {formatSignedPct(row.infYtd, 2)}
                         </td>
-                        <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-700">
+                        <td className="py-2 px-2 text-right font-mono tabular-nums text-slate-700 truncate">
                           {formatSignedPct(row.infYoy, 2)}
                         </td>
                       </tr>

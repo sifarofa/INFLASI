@@ -560,66 +560,90 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
 
         {/* Table Body */}
-        <div className="overflow-x-auto max-h-[66vh]">
+        <div className="overflow-y-auto overflow-x-hidden max-h-[70vh]">
           {isProvinsi ? (
-            <table className="w-full text-left border-collapse text-xs">
+            <table className="w-full table-fixed text-left border-collapse text-[11px]">
+              <colgroup>
+                <col className="w-[8%]" />
+                <col className="w-[28%]" />
+                <col className="w-[9%]" />
+                <col className="w-[9%]" />
+                <col className="w-[9%]" />
+                <col className="w-[9%]" />
+                <col className="w-[9%]" />
+                <col className="w-[9%]" />
+                <col className="w-[10%]" />
+              </colgroup>
               <thead className="sticky top-0 z-20">
-                <tr className="bg-slate-900 text-white text-xs font-bold">
+                <tr className="bg-slate-900 text-white text-[11px] font-bold">
                   <th
                     rowSpan={2}
                     onClick={() => toggleProvSort('CODE')}
-                    className="py-2.5 px-3 border-r border-slate-700 cursor-pointer hover:bg-slate-800 select-none w-24 align-middle"
+                    className="py-2 px-2 border-r border-slate-700 cursor-pointer hover:bg-slate-800 select-none align-middle"
                   >
                     <div className="flex items-center justify-between gap-1">
-                      <span>Kode</span>
+                      <span className="truncate">Kode</span>
                       {renderSortIcon(provSortKey === 'CODE', provSortDir, true)}
                     </div>
                   </th>
                   <th
                     rowSpan={2}
                     onClick={() => toggleProvSort('NAMA')}
-                    className="py-2.5 px-3 border-r border-slate-700 cursor-pointer hover:bg-slate-800 select-none min-w-[240px] align-middle"
+                    className="py-2 px-2 border-r border-slate-700 cursor-pointer hover:bg-slate-800 select-none align-middle"
                   >
                     <div className="flex items-center justify-between gap-1">
-                      <span>Komoditas / Kelompok</span>
+                      <span className="truncate">Komoditas / Kelompok</span>
                       {renderSortIcon(provSortKey === 'NAMA', provSortDir, true)}
                     </div>
                   </th>
                   <th
                     colSpan={6}
-                    className="py-2 px-3 text-center border-b border-slate-700 bg-emerald-800 text-white tracking-tight font-bold"
+                    className="py-1.5 px-2 text-center border-b border-slate-700 bg-emerald-800 text-white tracking-tight font-bold truncate"
                   >
                     {metricGroupTitle[metric]}
                   </th>
                   <th
                     rowSpan={2}
                     onClick={() => toggleProvSort('ARAH')}
-                    className="py-2.5 px-3 text-center border-l border-slate-700 cursor-pointer hover:bg-slate-800 select-none whitespace-nowrap align-middle"
+                    className="py-2 px-1.5 text-center border-l border-slate-700 cursor-pointer hover:bg-slate-800 select-none align-middle"
                   >
-                    <div className="inline-flex items-center justify-center gap-1">
-                      <span>Arah 5 Kab/Kota</span>
+                    <div className="inline-flex items-center justify-center gap-0.5 leading-tight">
+                      <span>Arah</span>
                       {renderSortIcon(provSortKey === 'ARAH', provSortDir, true)}
                     </div>
                   </th>
                 </tr>
 
-                <tr className="bg-slate-100 text-slate-900 border-b border-slate-300 text-xs font-bold">
+                <tr className="bg-slate-100 text-slate-900 border-b border-slate-300 text-[11px] font-bold">
                   {JEJER_COLUMN_ORDER.map((rCode) => {
                     const reg = REGIONS.find((r) => r.code === rCode)!;
                     const isSorted = provSortKey === rCode;
                     const isKalbar = rCode === '6100';
+                    const shortLabel =
+                      rCode === '6106'
+                        ? 'Ketapang'
+                        : rCode === '6107'
+                        ? 'Sintang'
+                        : rCode === '6111'
+                        ? 'KKU'
+                        : rCode === '6171'
+                        ? 'Pontianak'
+                        : rCode === '6172'
+                        ? 'Singkawang'
+                        : 'Kalbar';
                     return (
                       <th
                         key={rCode}
                         onClick={() => toggleProvSort(rCode)}
-                        className={`py-2 px-3 text-right border-r border-slate-200 cursor-pointer select-none whitespace-nowrap transition-colors ${
+                        title={reg.name}
+                        className={`py-1.5 px-1.5 text-right border-r border-slate-200 cursor-pointer select-none transition-colors ${
                           isKalbar
                             ? 'bg-slate-200 text-slate-900 hover:bg-slate-300'
                             : 'hover:bg-slate-200/70'
                         }`}
                       >
-                        <div className="inline-flex items-center justify-end gap-1">
-                          <span>{reg.shortName}</span>
+                        <div className="flex items-center justify-end gap-0.5">
+                          <span className="truncate">{shortLabel}</span>
                           {renderSortIcon(isSorted, provSortDir)}
                         </div>
                       </th>
@@ -628,9 +652,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 </tr>
 
                 {umumRow && (
-                  <tr className="bg-slate-900 text-white font-mono text-xs border-b border-slate-700">
-                    <td className="py-2.5 px-3 border-r border-slate-700 font-bold">0</td>
-                    <td className="py-2.5 px-3 font-sans font-extrabold border-r border-slate-700">
+                  <tr className="bg-slate-900 text-white font-mono text-[11px] border-b border-slate-700">
+                    <td className="py-2 px-2 border-r border-slate-700 font-bold">0</td>
+                    <td className="py-2 px-2 font-sans font-extrabold border-r border-slate-700 truncate">
                       TOTAL / UMUM
                     </td>
                     {JEJER_COLUMN_ORDER.map((rCode) => {
@@ -638,7 +662,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                       return (
                         <td
                           key={rCode}
-                          className={`py-2.5 px-3 text-right tabular-nums border-r border-slate-800 ${
+                          className={`py-2 px-1.5 text-right tabular-nums border-r border-slate-800 truncate ${
                             rCode === '6100' ? 'bg-slate-800 font-extrabold' : 'font-semibold'
                           }`}
                         >
@@ -646,7 +670,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                         </td>
                       );
                     })}
-                    <td className="py-2.5 px-3 text-center font-sans font-semibold text-slate-200">
+                    <td className="py-2 px-1.5 text-center font-sans font-semibold text-slate-200">
                       {umumRow.upCount}↑ · {umumRow.downCount}↓
                     </td>
                   </tr>
@@ -663,10 +687,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 ) : (
                   provinsiRows.map((row) => (
                     <tr key={row.kode} className="hover:bg-slate-50 transition-colors">
-                      <td className="py-2.5 px-3 font-mono text-xs font-medium text-slate-600 border-r border-slate-100 whitespace-nowrap">
+                      <td className="py-2 px-2 font-mono text-[11px] font-medium text-slate-600 border-r border-slate-100 truncate">
                         {row.kode}
                       </td>
-                      <td className="py-2.5 px-3 font-semibold text-slate-900 border-r border-slate-100">
+                      <td
+                        className="py-2 px-2 font-semibold text-slate-900 border-r border-slate-100 truncate"
+                        title={row.nama}
+                      >
                         {row.nama}
                       </td>
                       {JEJER_COLUMN_ORDER.map((rCode) => {
@@ -675,7 +702,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                         return (
                           <td
                             key={rCode}
-                            className={`py-2.5 px-3 text-right font-mono tabular-nums border-r border-slate-100 whitespace-nowrap ${cellStyleClass(
+                            className={`py-2 px-1.5 text-right font-mono tabular-nums border-r border-slate-100 truncate ${cellStyleClass(
                               val,
                               isKalbar
                             )}`}
@@ -684,20 +711,20 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                           </td>
                         );
                       })}
-                      <td className="py-2.5 px-3 text-center whitespace-nowrap font-mono text-xs">
+                      <td className="py-2 px-1.5 text-center font-mono text-[11px] truncate">
                         {row.upCount === 0 && row.downCount === 0 ? (
                           <span className="text-slate-400 font-medium">Stabil</span>
                         ) : row.upCount > 0 && row.downCount === 0 ? (
                           <span className="text-rose-700 font-bold">
-                            {row.upCount}/{row.activeRegionCount} Naik ↑
+                            {row.upCount}/{row.activeRegionCount} ↑
                           </span>
                         ) : row.downCount > 0 && row.upCount === 0 ? (
                           <span className="text-emerald-700 font-bold">
-                            {row.downCount}/{row.activeRegionCount} Turun ↓
+                            {row.downCount}/{row.activeRegionCount} ↓
                           </span>
                         ) : (
                           <span className="text-amber-700 font-bold">
-                            {row.upCount}↑ / {row.downCount}↓
+                            {row.upCount}↑/{row.downCount}↓
                           </span>
                         )}
                       </td>
@@ -707,104 +734,114 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               </tbody>
             </table>
           ) : (
-            <table className="w-full text-left border-collapse text-xs">
+            <table className="w-full table-fixed text-left border-collapse text-[11px]">
+              <colgroup>
+                <col className="w-[9%]" />
+                <col className="w-[33%]" />
+                <col className="w-[10%]" />
+                <col className="w-[10%]" />
+                <col className="w-[11%]" />
+                <col className="w-[9%]" />
+                <col className="w-[9%]" />
+                <col className="w-[9%]" />
+              </colgroup>
               <thead className="sticky top-0 z-20">
-                <tr className="bg-slate-900 text-white text-xs font-bold">
+                <tr className="bg-slate-900 text-white text-[11px] font-bold">
                   <th
                     onClick={() => toggleKabSort('CODE')}
-                    className="py-2.5 px-3 border-r border-slate-700 cursor-pointer hover:bg-slate-800 select-none whitespace-nowrap"
+                    className="py-2 px-2 border-r border-slate-700 cursor-pointer hover:bg-slate-800 select-none"
                   >
-                    <div className="inline-flex items-center gap-1">
-                      <span>Kode</span>
+                    <div className="flex items-center gap-1">
+                      <span className="truncate">Kode</span>
                       {renderSortIcon(kabSortKey === 'CODE', kabSortDir, true)}
                     </div>
                   </th>
                   <th
                     onClick={() => toggleKabSort('NAMA')}
-                    className="py-2.5 px-3 border-r border-slate-700 cursor-pointer hover:bg-slate-800 select-none min-w-[260px]"
+                    className="py-2 px-2 border-r border-slate-700 cursor-pointer hover:bg-slate-800 select-none"
                   >
-                    <div className="inline-flex items-center gap-1">
-                      <span>Komoditas / Kelompok</span>
+                    <div className="flex items-center gap-1">
+                      <span className="truncate">Komoditas / Kelompok</span>
                       {renderSortIcon(kabSortKey === 'NAMA', kabSortDir, true)}
                     </div>
                   </th>
                   <th
                     onClick={() => toggleKabSort('ANDIL')}
-                    className="py-2.5 px-3 text-right border-r border-slate-700 cursor-pointer hover:bg-slate-800 select-none whitespace-nowrap"
+                    className="py-2 px-2 text-right border-r border-slate-700 cursor-pointer hover:bg-slate-800 select-none"
                   >
-                    <div className="inline-flex items-center justify-end gap-1">
-                      <span>Andil (%)</span>
+                    <div className="flex items-center justify-end gap-1">
+                      <span className="truncate">Andil (%)</span>
                       {renderSortIcon(kabSortKey === 'ANDIL', kabSortDir, true)}
                     </div>
                   </th>
                   <th
                     onClick={() => toggleKabSort('ANDIL_BPS')}
-                    className="py-2.5 px-3 text-right border-r border-slate-700 cursor-pointer hover:bg-slate-800 select-none whitespace-nowrap"
+                    className="py-2 px-2 text-right border-r border-slate-700 cursor-pointer hover:bg-slate-800 select-none"
                   >
-                    <div className="inline-flex items-center justify-end gap-1">
-                      <span>Andil (bps)</span>
+                    <div className="flex items-center justify-end gap-1">
+                      <span className="truncate">Andil (bps)</span>
                       {renderSortIcon(kabSortKey === 'ANDIL_BPS', kabSortDir, true)}
                     </div>
                   </th>
                   <th
                     onClick={() => toggleKabSort('INFLASI')}
-                    className="py-2.5 px-3 text-right border-r border-slate-700 cursor-pointer hover:bg-slate-800 select-none whitespace-nowrap"
+                    className="py-2 px-2 text-right border-r border-slate-700 cursor-pointer hover:bg-slate-800 select-none"
                   >
-                    <div className="inline-flex items-center justify-end gap-1">
-                      <span>Inflasi MtM (%)</span>
+                    <div className="flex items-center justify-end gap-1">
+                      <span className="truncate">Inflasi MtM</span>
                       {renderSortIcon(kabSortKey === 'INFLASI', kabSortDir, true)}
                     </div>
                   </th>
                   <th
                     onClick={() => toggleKabSort('RH')}
-                    className="py-2.5 px-3 text-right border-r border-slate-700 cursor-pointer hover:bg-slate-800 select-none whitespace-nowrap"
+                    className="py-2 px-2 text-right border-r border-slate-700 cursor-pointer hover:bg-slate-800 select-none"
                   >
-                    <div className="inline-flex items-center justify-end gap-1">
-                      <span>RH (N)</span>
+                    <div className="flex items-center justify-end gap-1">
+                      <span className="truncate">RH (N)</span>
                       {renderSortIcon(kabSortKey === 'RH', kabSortDir, true)}
                     </div>
                   </th>
                   <th
                     onClick={() => toggleKabSort('IHK')}
-                    className="py-2.5 px-3 text-right border-r border-slate-700 cursor-pointer hover:bg-slate-800 select-none whitespace-nowrap"
+                    className="py-2 px-2 text-right border-r border-slate-700 cursor-pointer hover:bg-slate-800 select-none"
                   >
-                    <div className="inline-flex items-center justify-end gap-1">
-                      <span>IHK (N)</span>
+                    <div className="flex items-center justify-end gap-1">
+                      <span className="truncate">IHK (N)</span>
                       {renderSortIcon(kabSortKey === 'IHK', kabSortDir, true)}
                     </div>
                   </th>
                   <th
                     onClick={() => toggleKabSort('ARAH')}
-                    className="py-2.5 px-3 text-center cursor-pointer hover:bg-slate-800 select-none whitespace-nowrap"
+                    className="py-2 px-2 text-center cursor-pointer hover:bg-slate-800 select-none"
                   >
-                    <div className="inline-flex items-center justify-center gap-1">
-                      <span>Arah</span>
+                    <div className="flex items-center justify-center gap-1">
+                      <span className="truncate">Arah</span>
                       {renderSortIcon(kabSortKey === 'ARAH', kabSortDir, true)}
                     </div>
                   </th>
                 </tr>
 
-                <tr className="bg-slate-800 text-white font-mono text-xs border-b border-slate-700">
-                  <td className="py-2.5 px-3 border-r border-slate-700 font-bold">0</td>
-                  <td className="py-2.5 px-3 font-sans font-extrabold border-r border-slate-700">
+                <tr className="bg-slate-800 text-white font-mono text-[11px] border-b border-slate-700">
+                  <td className="py-2 px-2 border-r border-slate-700 font-bold">0</td>
+                  <td className="py-2 px-2 font-sans font-extrabold border-r border-slate-700 truncate">
                     TOTAL / UMUM ({regionMeta.shortName})
                   </td>
-                  <td className="py-2.5 px-3 text-right tabular-nums border-r border-slate-700 font-bold">
+                  <td className="py-2 px-2 text-right tabular-nums border-r border-slate-700 font-bold">
                     {formatNumber(scopedResult.umum.andilInflasi, 4)}
                   </td>
-                  <td className="py-2.5 px-3 text-right tabular-nums border-r border-slate-700 font-bold">
+                  <td className="py-2 px-2 text-right tabular-nums border-r border-slate-700 font-bold">
                     {formatNumber(scopedResult.umum.andilInflasi * 100, 2)}
                   </td>
-                  <td className="py-2.5 px-3 text-right tabular-nums border-r border-slate-700 font-bold">
+                  <td className="py-2 px-2 text-right tabular-nums border-r border-slate-700 font-bold">
                     {formatSignedPct(scopedResult.umum.inflasi, 3)}
                   </td>
-                  <td className="py-2.5 px-3 text-right tabular-nums border-r border-slate-700">
+                  <td className="py-2 px-2 text-right tabular-nums border-r border-slate-700">
                     {formatNumber(scopedResult.umum.rhCurrent, 3)}
                   </td>
-                  <td className="py-2.5 px-3 text-right tabular-nums border-r border-slate-700">
+                  <td className="py-2 px-2 text-right tabular-nums border-r border-slate-700">
                     {formatIndex(scopedResult.umum.ihkCurrent, 2)}
                   </td>
-                  <td className="py-2.5 px-3 text-center font-sans font-bold">
+                  <td className="py-2 px-2 text-center font-sans font-bold">
                     {scopedResult.umum.inflasi > 0.0005
                       ? 'Inflasi ↑'
                       : scopedResult.umum.inflasi < -0.0005
@@ -824,14 +861,17 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 ) : (
                   kabKotaRows.map((row) => (
                     <tr key={row.kode} className="hover:bg-slate-50 transition-colors">
-                      <td className="py-2.5 px-3 font-mono text-xs font-medium text-slate-600 border-r border-slate-100 whitespace-nowrap">
+                      <td className="py-2 px-2 font-mono text-[11px] font-medium text-slate-600 border-r border-slate-100 truncate">
                         {row.kode}
                       </td>
-                      <td className="py-2.5 px-3 font-semibold text-slate-900 border-r border-slate-100">
+                      <td
+                        className="py-2 px-2 font-semibold text-slate-900 border-r border-slate-100 truncate"
+                        title={row.nama}
+                      >
                         {row.nama}
                       </td>
                       <td
-                        className={`py-2.5 px-3 text-right font-mono tabular-nums border-r border-slate-100 font-semibold ${
+                        className={`py-2 px-2 text-right font-mono tabular-nums border-r border-slate-100 font-semibold ${
                           row.andilInflasi > 0.00005
                             ? 'text-rose-700'
                             : row.andilInflasi < -0.00005
@@ -842,7 +882,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                         {Math.abs(row.andilInflasi) < 0.00005 ? '0' : formatNumber(row.andilInflasi, 4)}
                       </td>
                       <td
-                        className={`py-2.5 px-3 text-right font-mono tabular-nums border-r border-slate-100 ${
+                        className={`py-2 px-2 text-right font-mono tabular-nums border-r border-slate-100 ${
                           row.andilInflasi > 0.00005
                             ? 'text-rose-700 font-semibold'
                             : row.andilInflasi < -0.00005
@@ -855,7 +895,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                           : formatNumber(row.andilInflasi * 100, 2)}
                       </td>
                       <td
-                        className={`py-2.5 px-3 text-right font-mono tabular-nums border-r border-slate-100 font-semibold ${
+                        className={`py-2 px-2 text-right font-mono tabular-nums border-r border-slate-100 font-semibold ${
                           row.inflasi > 0.0005
                             ? 'text-rose-700'
                             : row.inflasi < -0.0005
@@ -865,13 +905,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                       >
                         {formatSignedPct(row.inflasi, 3)}
                       </td>
-                      <td className="py-2.5 px-3 text-right font-mono tabular-nums border-r border-slate-100 text-slate-800">
+                      <td className="py-2 px-2 text-right font-mono tabular-nums border-r border-slate-100 text-slate-800">
                         {formatNumber(row.rhCurrent, 3)}
                       </td>
-                      <td className="py-2.5 px-3 text-right font-mono tabular-nums border-r border-slate-100 font-semibold text-slate-900">
+                      <td className="py-2 px-2 text-right font-mono tabular-nums border-r border-slate-100 font-semibold text-slate-900">
                         {formatIndex(row.ihkCurrent, 2)}
                       </td>
-                      <td className="py-2.5 px-3 text-center whitespace-nowrap font-mono text-xs font-bold">
+                      <td className="py-2 px-2 text-center font-mono text-[11px] font-bold">
                         {row.inflasi > 0.0005 ? (
                           <span className="text-rose-700">Naik ↑</span>
                         ) : row.inflasi < -0.0005 ? (

@@ -5,7 +5,10 @@ import {
   ArrowUpDown,
   CheckCircle2,
   Download,
+  Eye,
+  EyeOff,
   FileSpreadsheet,
+  Flag,
   Layers,
   Loader2,
   Search,
@@ -42,12 +45,60 @@ interface RespondentRHViewProps {
     frequency: RespondentFrequency,
     dataset: RespondentRHDataset
   ) => Promise<{ syncedToSupabase: boolean; savedRows: number; error?: string }>;
+  onUpdateObservationAnnotation?: (
+    regionCode: KabKotaCode,
+    frequency: RespondentFrequency,
+    observationId: string,
+    patch: { catatan?: string; perluPerbaikan?: boolean }
+  ) => void;
   onApplyCalculatedRhToLK?: (
     regionCode: KabKotaCode,
     rhUpdates: Record<string, number>,
     sourceLabel: string
   ) => Promise<{ syncedToSupabase: boolean; savedRows: number; error?: string }>;
 }
+
+const ObservationNoteInput: React.FC<{
+  value: string;
+  flagged?: boolean;
+  onCommit: (nextNote: string) => void;
+}> = ({ value, flagged, onCommit }) => {
+  const [draft, setDraft] = useState(value);
+
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+
+  const commit = () => {
+    if (draft !== value) {
+      onCommit(draft);
+    }
+  };
+
+  return (
+    <input
+      type="text"
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.currentTarget.blur();
+        } else if (e.key === 'Escape') {
+          setDraft(value);
+          e.currentTarget.blur();
+        }
+      }}
+      placeholder="Tulis catatan perbaikan..."
+      aria-label="Catatan perbaikan responden"
+      className={`w-full rounded border px-2 py-1 text-[11px] font-medium text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-1 ${
+        flagged
+          ? 'border-rose-300 bg-white focus:border-rose-600 focus:ring-rose-500/30'
+          : 'border-slate-300 bg-white focus:border-slate-800 focus:ring-slate-500/20'
+      }`}
+    />
+  );
+};
 
 const FREQUENCY_META: Record<
   RespondentFrequency,
@@ -82,7 +133,7 @@ const FREQUENCY_META: Record<
   },
 };
 
-type MovementFilter = 'ALL' | 'UP' | 'DOWN' | 'FLAT' | 'MISSING';
+type MovementFilter = 'ALL' | 'UP' | 'DOWN' | 'FLAT' | 'MISSING' | 'FLAGGED';
 type TableViewMode = 'OBSERVATIONS' | 'COMMODITY_SUMMARY';
 type RespSortKey =
   | 'KOMODITAS'
@@ -94,7 +145,7 @@ type RespSortKey =
   | 'AVG_PREV'
   | 'AVG_CURR'
   | 'RH'
-  | 'PCT';
+  | 'FLAGGED';
 
 export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
   period,
@@ -103,6 +154,7 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
   userRole,
   allowedRegion,
   onSetDataset,
+  onUpdateObservationAnnotation,
   onApplyCalculatedRhToLK,
 }) => {
   const isProvinsi = userRole === 'PROVINSI';
@@ -119,6 +171,7 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
   const [movementFilter, setMovementFilter] = useState<MovementFilter>('ALL');
   const [sortKey, setSortKey] = useState<RespSortKey>('RH');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+  const [hidePrevPrice, setHidePrevPrice] = useState<boolean>(false);
   const [pageSize, setPageSize] = useState<number>(50);
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -252,13 +305,25 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
     let down = 0;
     let flat = 0;
     let missing = 0;
+    let flagged = 0;
     for (const o of obs) {
+      if (o.perluPerbaikan) flagged++;
       if (o.priceRelative === null) missing++;
       else if (o.priceRelative > 100.001) up++;
       else if (o.priceRelative < 99.999) down++;
       else flat++;
     }
-    return { total: obs.length, up, down, flat, missing };
+    return { total: obs.length, up, down, flat, missing, flagged };
+  }, [currentDataset]);
+
+  const flaggedCountByCommodity = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const o of currentDataset?.observations ?? []) {
+      if (o.perluPerbaikan) {
+        map[o.kodeKomoditas] = (map[o.kodeKomoditas] ?? 0) + 1;
+      }
+    }
+    return map;
   }, [currentDataset]);
 
   const marketTypes = useMemo(() => {
@@ -284,9 +349,10 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
       )
         return false;
       if (movementFilter === 'MISSING' && o.priceRelative !== null) return false;
+      if (movementFilter === 'FLAGGED' && !o.perluPerbaikan) return false;
 
       if (q) {
-        const hay = `${o.kodeKomoditas} ${o.komoditas} ${o.kualitas} ${o.pasar} ${o.namaResponden}`.toLowerCase();
+        const hay = `${o.kodeKomoditas} ${o.komoditas} ${o.kualitas} ${o.pasar} ${o.namaResponden} ${o.catatan ?? ''}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
@@ -316,6 +382,15 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
         const cmp = a.namaResponden.localeCompare(b.namaResponden);
         return sortDir === 'asc' ? cmp : -cmp;
       }
+      if (sortKey === 'FLAGGED') {
+        const fa = a.perluPerbaikan ? 1 : 0;
+        const fb = b.perluPerbaikan ? 1 : 0;
+        if (fa !== fb) return sortDir === 'desc' ? fb - fa : fa - fb;
+        const ca = (a.catatan ?? '').trim() ? 1 : 0;
+        const cb = (b.catatan ?? '').trim() ? 1 : 0;
+        if (ca !== cb) return sortDir === 'desc' ? cb - ca : ca - cb;
+        return cmpNullableNum(a.priceRelative, b.priceRelative);
+      }
       if (sortKey.startsWith('PREV_')) {
         const idx = Number(sortKey.slice(5));
         return cmpNullableNum(a.prevPrices[idx] ?? null, b.prevPrices[idx] ?? null);
@@ -329,11 +404,6 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
       }
       if (sortKey === 'AVG_CURR') {
         return cmpNullableNum(a.currAvgPrice, b.currAvgPrice);
-      }
-      if (sortKey === 'PCT') {
-        const pa = a.priceRelative !== null ? a.priceRelative - 100 : null;
-        const pb = b.priceRelative !== null ? b.priceRelative - 100 : null;
-        return cmpNullableNum(pa, pb);
       }
       return cmpNullableNum(a.priceRelative, b.priceRelative);
     });
@@ -363,6 +433,8 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
         )
           return false;
         if (movementFilter === 'MISSING' && s.calculatedRH !== null) return false;
+        if (movementFilter === 'FLAGGED' && !(flaggedCountByCommodity[s.kodeKomoditas] > 0))
+          return false;
         if (q) {
           const hay = `${s.kodeKomoditas} ${s.komoditas}`.toLowerCase();
           if (!hay.includes(q)) return false;
@@ -374,12 +446,25 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
           const cmp = a.kodeKomoditas.localeCompare(b.kodeKomoditas);
           return sortDir === 'asc' ? cmp : -cmp;
         }
+        if (sortKey === 'FLAGGED') {
+          const fa = flaggedCountByCommodity[a.kodeKomoditas] ?? 0;
+          const fb = flaggedCountByCommodity[b.kodeKomoditas] ?? 0;
+          if (fa !== fb) return sortDir === 'desc' ? fb - fa : fa - fb;
+        }
         const va = a.calculatedRH ?? -1;
         const vb = b.calculatedRH ?? -1;
         if (va === vb) return a.kodeKomoditas.localeCompare(b.kodeKomoditas);
         return sortDir === 'desc' ? vb - va : va - vb;
       });
-  }, [currentDataset, commodityFilter, movementFilter, searchQuery, sortKey, sortDir]);
+  }, [
+    currentDataset,
+    commodityFilter,
+    movementFilter,
+    searchQuery,
+    sortKey,
+    sortDir,
+    flaggedCountByCommodity,
+  ]);
 
   const totalPages = Math.max(1, Math.ceil(filteredObservations.length / pageSize));
   const safePage = Math.min(currentPage, totalPages);
@@ -402,23 +487,21 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
 
   const renderSortIcon = (key: RespSortKey) => {
     if (sortKey !== key) {
-      return <ArrowUpDown className="h-3 w-3 opacity-35 shrink-0" />;
+      return <ArrowUpDown className="h-3 w-3 opacity-45 shrink-0" />;
     }
     return sortDir === 'asc' ? (
-      <ArrowUp className="h-3 w-3 text-slate-900 shrink-0" />
+      <ArrowUp className="h-3 w-3 text-slate-950 shrink-0" />
     ) : (
-      <ArrowDown className="h-3 w-3 text-slate-900 shrink-0" />
+      <ArrowDown className="h-3 w-3 text-slate-950 shrink-0" />
     );
   };
 
   const rhColor = (rh: number | null) => {
-    if (rh === null) return 'text-amber-700 bg-amber-50/50';
-    if (rh > 100.001) return 'text-rose-700 bg-rose-50/50 font-semibold';
-    if (rh < 99.999) return 'text-emerald-700 bg-emerald-50/50 font-semibold';
-    return 'text-slate-600';
+    if (rh === null) return 'text-amber-900 bg-amber-100/80 font-bold';
+    if (rh > 100.001) return 'text-rose-800 bg-rose-100/70 font-extrabold';
+    if (rh < 99.999) return 'text-emerald-800 bg-emerald-100/70 font-extrabold';
+    return 'text-slate-900 font-bold';
   };
-
-  const totalTableCols = 8 + meta.periodCols.length * 2;
 
   return (
     <div className="space-y-5">
@@ -547,10 +630,10 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
       ) : (
         <>
           {/* Respondent-Level KPI Strip */}
-          <section className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+          <section className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
             <div className="rounded-lg border border-slate-200 bg-white p-3.5">
-              <span className="text-xs font-semibold text-slate-500 block">Total Observasi</span>
-              <span className="mt-1 text-2xl font-mono font-extrabold text-slate-900 block tabular-nums">
+              <span className="text-xs font-semibold text-slate-700 block">Total Observasi</span>
+              <span className="mt-1 text-2xl font-mono font-extrabold text-slate-950 block tabular-nums">
                 {stats.total}
               </span>
             </div>
@@ -558,12 +641,12 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
               onClick={() => setMovementFilter(movementFilter === 'UP' ? 'ALL' : 'UP')}
               className={`rounded-lg border p-3.5 cursor-pointer transition-colors ${
                 movementFilter === 'UP'
-                  ? 'border-rose-500 bg-rose-50/50'
+                  ? 'border-rose-500 bg-rose-50/60'
                   : 'border-slate-200 bg-white hover:border-slate-300'
               }`}
             >
-              <span className="text-xs text-rose-700 font-semibold block">Harga Naik (RH &gt; 100)</span>
-              <span className="mt-1 text-2xl font-mono font-extrabold text-rose-700 block tabular-nums">
+              <span className="text-xs text-rose-800 font-semibold block">Harga Naik (RH &gt; 100)</span>
+              <span className="mt-1 text-2xl font-mono font-extrabold text-rose-800 block tabular-nums">
                 {stats.up}
               </span>
             </div>
@@ -571,12 +654,12 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
               onClick={() => setMovementFilter(movementFilter === 'DOWN' ? 'ALL' : 'DOWN')}
               className={`rounded-lg border p-3.5 cursor-pointer transition-colors ${
                 movementFilter === 'DOWN'
-                  ? 'border-emerald-500 bg-emerald-50/50'
+                  ? 'border-emerald-500 bg-emerald-50/60'
                   : 'border-slate-200 bg-white hover:border-slate-300'
               }`}
             >
-              <span className="text-xs text-emerald-700 font-semibold block">Harga Turun (RH &lt; 100)</span>
-              <span className="mt-1 text-2xl font-mono font-extrabold text-emerald-700 block tabular-nums">
+              <span className="text-xs text-emerald-800 font-semibold block">Harga Turun (RH &lt; 100)</span>
+              <span className="mt-1 text-2xl font-mono font-extrabold text-emerald-800 block tabular-nums">
                 {stats.down}
               </span>
             </div>
@@ -584,12 +667,12 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
               onClick={() => setMovementFilter(movementFilter === 'FLAT' ? 'ALL' : 'FLAT')}
               className={`rounded-lg border p-3.5 cursor-pointer transition-colors ${
                 movementFilter === 'FLAT'
-                  ? 'border-sky-500 bg-sky-50/50'
+                  ? 'border-sky-500 bg-sky-50/60'
                   : 'border-slate-200 bg-white hover:border-slate-300'
               }`}
             >
-              <span className="text-xs font-semibold text-slate-500 block">Harga Tetap (RH = 100)</span>
-              <span className="mt-1 text-2xl font-mono font-extrabold text-slate-900 block tabular-nums">
+              <span className="text-xs font-semibold text-slate-700 block">Harga Tetap (RH = 100)</span>
+              <span className="mt-1 text-2xl font-mono font-extrabold text-slate-950 block tabular-nums">
                 {stats.flat}
               </span>
             </div>
@@ -597,13 +680,28 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
               onClick={() => setMovementFilter(movementFilter === 'MISSING' ? 'ALL' : 'MISSING')}
               className={`rounded-lg border p-3.5 cursor-pointer transition-colors ${
                 movementFilter === 'MISSING'
-                  ? 'border-amber-500 bg-amber-50/50'
+                  ? 'border-amber-500 bg-amber-50/60'
                   : 'border-slate-200 bg-white hover:border-slate-300'
               }`}
             >
-              <span className="text-xs font-semibold text-amber-700 block">Harga Kosong / Nol</span>
-              <span className="mt-1 text-2xl font-mono font-extrabold text-amber-700 block tabular-nums">
+              <span className="text-xs font-semibold text-amber-800 block">Harga Kosong / Nol</span>
+              <span className="mt-1 text-2xl font-mono font-extrabold text-amber-800 block tabular-nums">
                 {stats.missing}
+              </span>
+            </div>
+            <div
+              onClick={() => setMovementFilter(movementFilter === 'FLAGGED' ? 'ALL' : 'FLAGGED')}
+              className={`rounded-lg border p-3.5 cursor-pointer transition-colors ${
+                movementFilter === 'FLAGGED'
+                  ? 'border-rose-600 bg-rose-50'
+                  : 'border-slate-200 bg-white hover:border-rose-300'
+              }`}
+            >
+              <span className="text-xs font-semibold text-rose-800 inline-flex items-center gap-1">
+                <Flag className="h-3 w-3" /> Perlu Perbaikan
+              </span>
+              <span className="mt-1 text-2xl font-mono font-extrabold text-rose-700 block tabular-nums">
+                {stats.flagged}
               </span>
             </div>
           </section>
@@ -618,7 +716,7 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
                   className={`rounded px-3 py-1.5 text-xs font-bold transition-colors ${
                     tableView === 'OBSERVATIONS'
                       ? 'bg-white text-slate-900 shadow-xs'
-                      : 'text-slate-600 hover:text-slate-900'
+                      : 'text-slate-700 hover:text-slate-950'
                   }`}
                 >
                   Detail Responden ({filteredObservations.length})
@@ -629,7 +727,7 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
                   className={`rounded px-3 py-1.5 text-xs font-bold transition-colors ${
                     tableView === 'COMMODITY_SUMMARY'
                       ? 'bg-white text-slate-900 shadow-xs'
-                      : 'text-slate-600 hover:text-slate-900'
+                      : 'text-slate-700 hover:text-slate-950'
                   }`}
                 >
                   Ringkasan RH Komoditas ({filteredSummaries.length})
@@ -637,7 +735,7 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
               </div>
 
               {currentDataset.fileName && (
-                <span className="text-[11px] font-mono text-slate-500">
+                <span className="text-[11px] font-mono font-medium text-slate-700">
                   Sumber: {currentDataset.fileName}
                 </span>
               )}
@@ -648,7 +746,7 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
                 <div>
                   <label
                     htmlFor="resp-comm"
-                    className="block text-xs font-bold text-slate-700 mb-1"
+                    className="block text-xs font-bold text-slate-800 mb-1"
                   >
                     Filter Komoditas
                   </label>
@@ -659,7 +757,7 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
                       setCommodityFilter(e.target.value);
                       setCurrentPage(1);
                     }}
-                    className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-xs font-semibold text-slate-800 focus:border-slate-900 focus:outline-none max-w-[230px]"
+                    className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-xs font-semibold text-slate-900 focus:border-slate-900 focus:outline-none max-w-[230px]"
                   >
                     <option value="ALL">
                       Semua Komoditas ({currentDataset.commoditySummaries.length})
@@ -676,7 +774,7 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
                   <div>
                     <label
                       htmlFor="resp-mkt"
-                      className="block text-xs font-bold text-slate-700 mb-1"
+                      className="block text-xs font-bold text-slate-800 mb-1"
                     >
                       Jenis Pasar
                     </label>
@@ -687,7 +785,7 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
                         setMarketTypeFilter(e.target.value);
                         setCurrentPage(1);
                       }}
-                      className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-xs font-semibold text-slate-800 focus:border-slate-900 focus:outline-none"
+                      className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-xs font-semibold text-slate-900 focus:border-slate-900 focus:outline-none"
                     >
                       <option value="ALL">Semua Jenis Pasar</option>
                       {marketTypes.map((m) => (
@@ -702,9 +800,9 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
                 <div>
                   <label
                     htmlFor="resp-mov"
-                    className="block text-xs font-bold text-slate-700 mb-1"
+                    className="block text-xs font-bold text-slate-800 mb-1"
                   >
-                    Status RH
+                    Status RH / Penanda
                   </label>
                   <select
                     id="resp-mov"
@@ -713,25 +811,26 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
                       setMovementFilter(e.target.value as MovementFilter);
                       setCurrentPage(1);
                     }}
-                    className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-xs font-semibold text-slate-800 focus:border-slate-900 focus:outline-none"
+                    className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-xs font-semibold text-slate-900 focus:border-slate-900 focus:outline-none"
                   >
                     <option value="ALL">Semua Pergerakan</option>
                     <option value="UP">Naik (RH &gt; 100)</option>
                     <option value="DOWN">Turun (RH &lt; 100)</option>
                     <option value="FLAT">Tetap (RH = 100)</option>
                     <option value="MISSING">Harga Kosong (.00)</option>
+                    <option value="FLAGGED">Perlu Perbaikan ({stats.flagged})</option>
                   </select>
                 </div>
 
                 <div className="flex-1 min-w-[200px]">
                   <label
                     htmlFor="resp-search"
-                    className="block text-xs font-bold text-slate-700 mb-1"
+                    className="block text-xs font-bold text-slate-800 mb-1"
                   >
-                    Cari Responden / Pasar / Kualitas
+                    Cari Responden / Pasar / Kualitas / Catatan
                   </label>
                   <div className="relative">
-                    <Search className="h-3.5 w-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <Search className="h-3.5 w-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
                     <input
                       id="resp-search"
                       type="text"
@@ -740,17 +839,41 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
                         setSearchQuery(e.target.value);
                         setCurrentPage(1);
                       }}
-                      placeholder="Nama toko, pasar, kualitas, komoditas..."
-                      className="h-9 w-full rounded-md border border-slate-300 bg-white pl-8 pr-3 text-xs font-medium text-slate-900 placeholder:text-slate-400 focus:border-slate-900 focus:outline-none"
+                      placeholder="Nama toko, pasar, kualitas, komoditas, catatan..."
+                      className="h-9 w-full rounded-md border border-slate-300 bg-white pl-8 pr-3 text-xs font-medium text-slate-950 placeholder:text-slate-400 focus:border-slate-900 focus:outline-none"
                     />
                   </div>
                 </div>
               </div>
 
               <div className="flex flex-wrap items-center gap-2 shrink-0">
+                {tableView === 'OBSERVATIONS' && (
+                  <button
+                    type="button"
+                    onClick={() => setHidePrevPrice((v) => !v)}
+                    className={`h-9 inline-flex items-center gap-1.5 rounded-md border px-3 text-xs font-bold transition-colors shrink-0 ${
+                      hidePrevPrice
+                        ? 'border-sky-600 bg-sky-50 text-sky-900 hover:bg-sky-100'
+                        : 'border-slate-300 bg-white text-slate-800 hover:bg-slate-50'
+                    }`}
+                  >
+                    {hidePrevPrice ? (
+                      <>
+                        <Eye className="h-3.5 w-3.5 text-sky-700" />
+                        <span>Tampilkan Harga N-1</span>
+                      </>
+                    ) : (
+                      <>
+                        <EyeOff className="h-3.5 w-3.5 text-slate-700" />
+                        <span>Sembunyikan Harga N-1</span>
+                      </>
+                    )}
+                  </button>
+                )}
+
                 {isProvinsi && (
                   <>
-                    <label className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-700 cursor-pointer mr-1">
+                    <label className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-800 cursor-pointer mr-1">
                       <input
                         type="checkbox"
                         checked={autoFillEmptyRh100}
@@ -764,7 +887,7 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
                       <button
                         type="button"
                         onClick={() => void handleReplaceMissingWith100()}
-                        className="h-9 inline-flex items-center gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-3 text-xs font-bold text-amber-900 hover:bg-amber-100"
+                        className="h-9 inline-flex items-center gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-3 text-xs font-bold text-amber-950 hover:bg-amber-100"
                       >
                         <span>Replace RH Kosong → 100 ({stats.missing})</span>
                       </button>
@@ -809,45 +932,53 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
             </div>
 
             {tableView === 'COMMODITY_SUMMARY' ? (
-              <div className="overflow-x-auto max-h-[62vh]">
-                <table className="w-full text-left border-collapse text-xs">
-                  <thead className="sticky top-0 z-20 bg-slate-100 border-b border-slate-300 text-[11px] font-bold text-slate-800 select-none">
+              <div className="overflow-y-auto overflow-x-hidden max-h-[68vh]">
+                <table className="w-full table-fixed text-left border-collapse text-[11px]">
+                  <colgroup>
+                    <col className="w-[46%]" />
+                    <col className="w-[11%]" />
+                    <col className="w-[15%]" />
+                    <col className="w-[16%]" />
+                    <col className="w-[12%]" />
+                  </colgroup>
+                  <thead className="sticky top-0 z-20 bg-slate-100 border-b border-slate-300 text-[11px] font-bold text-slate-900 select-none">
                     <tr>
                       <th
                         onClick={() => toggleSort('KOMODITAS')}
-                        className="py-2.5 px-3 border-r border-slate-200 cursor-pointer hover:bg-slate-200/70 whitespace-nowrap"
+                        className="py-2 px-2.5 border-r border-slate-200 cursor-pointer hover:bg-slate-200/70"
                       >
                         <span className="inline-flex items-center gap-1">
                           Kode & Komoditas {renderSortIcon('KOMODITAS')}
                         </span>
                       </th>
-                      <th className="py-2.5 px-3 text-center border-r border-slate-200 whitespace-nowrap">
+                      <th className="py-2 px-2 text-center border-r border-slate-200">
                         Kualitas
                       </th>
-                      <th className="py-2.5 px-3 text-center border-r border-slate-200 whitespace-nowrap">
+                      <th className="py-2 px-2 text-center border-r border-slate-200">
                         Responden Aktif
                       </th>
                       <th
                         onClick={() => toggleSort('RH')}
-                        className="py-2.5 px-3 text-right border-r border-slate-200 cursor-pointer hover:bg-slate-200/70 whitespace-nowrap"
+                        className="py-2 px-2.5 text-right border-r border-slate-200 cursor-pointer hover:bg-slate-200/70"
                       >
                         <span className="inline-flex items-center justify-end gap-1">
-                          RH Komoditas (Hierarki BPS) {renderSortIcon('RH')}
+                          RH Komoditas {renderSortIcon('RH')}
                         </span>
                       </th>
-                      <th className="py-2.5 px-3 text-right whitespace-nowrap">Perubahan (%)</th>
+                      <th className="py-2 px-2.5 text-right">Perubahan (%)</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {filteredSummaries.length === 0 ? (
                       <tr>
-                        <td colSpan={5} className="py-10 text-center text-slate-500">
+                        <td colSpan={5} className="py-10 text-center text-slate-600 font-medium">
                           Tidak ada ringkasan komoditas yang cocok dengan filter.
                         </td>
                       </tr>
                     ) : (
                       filteredSummaries.map((sum) => {
                         const pct = sum.calculatedRH !== null ? sum.calculatedRH - 100 : null;
+                        const flagCount = flaggedCountByCommodity[sum.kodeKomoditas] ?? 0;
                         return (
                           <tr
                             key={sum.kodeKomoditas}
@@ -856,22 +987,37 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
                               setTableView('OBSERVATIONS');
                               setCurrentPage(1);
                             }}
-                            className="hover:bg-slate-50 cursor-pointer transition-colors"
+                            className={`cursor-pointer transition-colors ${
+                              flagCount > 0
+                                ? 'bg-rose-50/70 hover:bg-rose-100/60'
+                                : 'hover:bg-slate-50'
+                            }`}
                           >
-                            <td className="py-2 px-3 border-r border-slate-100">
-                              <span className="font-mono text-[11px] text-slate-500 mr-2">
+                            <td
+                              className={`py-2 px-2.5 border-r border-slate-100 truncate ${
+                                flagCount > 0 ? 'border-l-4 border-l-rose-600' : ''
+                              }`}
+                              title={`${sum.kodeKomoditas} — ${sum.komoditas}`}
+                            >
+                              <span className="font-mono text-[11px] font-bold text-slate-700 mr-2">
                                 {sum.kodeKomoditas}
                               </span>
-                              <span className="font-semibold text-slate-900">{sum.komoditas}</span>
+                              <span className="font-bold text-slate-950">{sum.komoditas}</span>
+                              {flagCount > 0 && (
+                                <span className="ml-2 inline-flex items-center gap-1 rounded bg-rose-100 px-1.5 py-0.5 text-[9.5px] font-bold text-rose-800 border border-rose-300">
+                                  <Flag className="h-2.5 w-2.5" />
+                                  {flagCount} perbaikan
+                                </span>
+                              )}
                             </td>
-                            <td className="py-2 px-3 text-center font-mono border-r border-slate-100 text-slate-700">
+                            <td className="py-2 px-2 text-center font-mono font-semibold border-r border-slate-100 text-slate-800">
                               {sum.qualityCount}
                             </td>
-                            <td className="py-2 px-3 text-center font-mono border-r border-slate-100 text-slate-700">
+                            <td className="py-2 px-2 text-center font-mono font-semibold border-r border-slate-100 text-slate-800">
                               {sum.activeObservationCount} / {sum.observationCount}
                             </td>
                             <td
-                              className={`py-2 px-3 text-right font-mono tabular-nums border-r border-slate-100 ${rhColor(
+                              className={`py-2 px-2.5 text-right font-mono tabular-nums border-r border-slate-100 ${rhColor(
                                 sum.calculatedRH
                               )}`}
                             >
@@ -880,7 +1026,7 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
                                 : 'Kosong'}
                             </td>
                             <td
-                              className={`py-2 px-3 text-right font-mono tabular-nums ${rhColor(
+                              className={`py-2 px-2.5 text-right font-mono tabular-nums ${rhColor(
                                 sum.calculatedRH
                               )}`}
                             >
@@ -895,212 +1041,406 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
               </div>
             ) : (
               <>
-                <div className="overflow-x-auto max-h-[62vh]">
-                  <table className="w-full text-left border-collapse text-xs">
-                    <thead className="sticky top-0 z-20 bg-slate-100 border-b border-slate-300 text-[11px] font-bold text-slate-800 select-none">
-                      <tr>
-                        <th
-                          rowSpan={2}
-                          onClick={() => toggleSort('KOMODITAS')}
-                          className="py-2.5 px-3 border-r border-slate-200 cursor-pointer hover:bg-slate-200/70 whitespace-nowrap align-middle"
-                        >
-                          <span className="inline-flex items-center gap-1">
-                            Komoditas {renderSortIcon('KOMODITAS')}
-                          </span>
+                <div className="overflow-y-auto overflow-x-hidden max-h-[68vh]">
+                  <table className="w-full table-fixed text-left border-collapse text-[11px]">
+                    <colgroup>
+                      {hidePrevPrice ? (
+                        frequency === 'MINGGUAN' ? (
+                          <>
+                            <col className="w-[20%]" />
+                            <col className="w-[15%]" />
+                            <col className="w-[25%]" />
+                            <col className="w-[7.5%]" />
+                            <col className="w-[7.5%]" />
+                            <col className="w-[7%]" />
+                            <col className="w-[18%]" />
+                          </>
+                        ) : frequency === 'DWIMINGGUAN' ? (
+                          <>
+                            <col className="w-[22%]" />
+                            <col className="w-[16%]" />
+                            <col className="w-[21%]" />
+                            <col className="w-[8%]" />
+                            <col className="w-[8%]" />
+                            <col className="w-[7%]" />
+                            <col className="w-[18%]" />
+                          </>
+                        ) : (
+                          <>
+                            <col className="w-[24%]" />
+                            <col className="w-[19%]" />
+                            <col className="w-[12%]" />
+                            <col className="w-[9%]" />
+                            <col className="w-[9%]" />
+                            <col className="w-[8%]" />
+                            <col className="w-[19%]" />
+                          </>
+                        )
+                      ) : frequency === 'MINGGUAN' ? (
+                        <>
+                          <col className="w-[17%]" />
+                          <col className="w-[12%]" />
+                          <col className="w-[18%]" />
+                          <col className="w-[18%]" />
+                          <col className="w-[6.5%]" />
+                          <col className="w-[6.5%]" />
+                          <col className="w-[6.5%]" />
+                          <col className="w-[15.5%]" />
+                        </>
+                      ) : frequency === 'DWIMINGGUAN' ? (
+                        <>
+                          <col className="w-[19%]" />
+                          <col className="w-[14%]" />
+                          <col className="w-[15%]" />
+                          <col className="w-[15%]" />
+                          <col className="w-[7%]" />
+                          <col className="w-[7%]" />
+                          <col className="w-[7%]" />
+                          <col className="w-[16%]" />
+                        </>
+                      ) : (
+                        <>
+                          <col className="w-[21%]" />
+                          <col className="w-[17%]" />
+                          <col className="w-[10%]" />
+                          <col className="w-[10%]" />
+                          <col className="w-[8%]" />
+                          <col className="w-[8%]" />
+                          <col className="w-[8%]" />
+                          <col className="w-[18%]" />
+                        </>
+                      )}
+                    </colgroup>
+                    <thead className="sticky top-0 z-20 bg-slate-100 border-b border-slate-300 text-[11px] font-bold text-slate-900 select-none">
+                      <tr className="leading-tight">
+                        <th className="py-2 px-2 border-r border-slate-200 align-middle">
+                          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                            <button
+                              type="button"
+                              onClick={() => toggleSort('KOMODITAS')}
+                              className="inline-flex items-center gap-0.5 text-slate-950 hover:text-black"
+                            >
+                              <span>Komoditas</span>
+                              {renderSortIcon('KOMODITAS')}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => toggleSort('KUALITAS')}
+                              className="inline-flex items-center gap-0.5 text-[10.5px] font-bold text-slate-700 hover:text-slate-950"
+                            >
+                              <span>/ Kualitas</span>
+                              {renderSortIcon('KUALITAS')}
+                            </button>
+                          </div>
+                        </th>
+                        <th className="py-2 px-2 border-r border-slate-200 align-middle">
+                          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                            <button
+                              type="button"
+                              onClick={() => toggleSort('RESPONDEN')}
+                              className="inline-flex items-center gap-0.5 text-slate-950 hover:text-black"
+                            >
+                              <span>Responden</span>
+                              {renderSortIcon('RESPONDEN')}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => toggleSort('PASAR')}
+                              className="inline-flex items-center gap-0.5 text-[10.5px] font-bold text-slate-700 hover:text-slate-950"
+                            >
+                              <span>/ Pasar</span>
+                              {renderSortIcon('PASAR')}
+                            </button>
+                          </div>
+                        </th>
+                        {!hidePrevPrice && (
+                          <th className="py-1.5 px-2 border-r border-sky-200 bg-sky-100/90 text-sky-950 align-middle">
+                            <div className="flex flex-wrap items-center justify-between gap-1">
+                              <div className="inline-flex items-center gap-1">
+                                <span>Harga N-1</span>
+                                <button
+                                  type="button"
+                                  onClick={() => setHidePrevPrice(true)}
+                                  title="Sembunyikan kolom Harga N-1"
+                                  aria-label="Sembunyikan kolom Harga N-1"
+                                  className="rounded p-0.5 text-sky-900 hover:bg-sky-200/80"
+                                >
+                                  <EyeOff className="h-3 w-3" />
+                                </button>
+                              </div>
+                              <div className="inline-flex flex-wrap items-center gap-1">
+                                {meta.periodCols.map((col, idx) => {
+                                  const k: RespSortKey = `PREV_${idx}`;
+                                  const isActive = sortKey === k;
+                                  return (
+                                    <button
+                                      key={`prev-sort-${col}`}
+                                      type="button"
+                                      onClick={() => toggleSort(k)}
+                                      title={`Urutkan berdasarkan Harga N-1 ${col}`}
+                                      className={`inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[9.5px] font-mono font-bold transition-colors ${
+                                        isActive
+                                          ? 'bg-sky-800 text-white'
+                                          : 'bg-white text-sky-950 hover:bg-sky-200'
+                                      }`}
+                                    >
+                                      <span>{col}</span>
+                                      {isActive && renderSortIcon(k)}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          </th>
+                        )}
+                        <th className="py-1.5 px-2 border-r border-amber-200 bg-amber-100/90 text-amber-950 align-middle">
+                          <div className="flex flex-wrap items-center justify-between gap-1">
+                            <span>Harga N</span>
+                            <div className="inline-flex flex-wrap items-center gap-1">
+                              {meta.periodCols.map((col, idx) => {
+                                const k: RespSortKey = `CURR_${idx}`;
+                                const isActive = sortKey === k;
+                                return (
+                                  <button
+                                    key={`curr-sort-${col}`}
+                                    type="button"
+                                    onClick={() => toggleSort(k)}
+                                    title={`Urutkan berdasarkan Harga N ${col}`}
+                                    className={`inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[9.5px] font-mono font-bold transition-colors ${
+                                      isActive
+                                        ? 'bg-amber-800 text-white'
+                                        : 'bg-white text-amber-950 hover:bg-amber-200'
+                                    }`}
+                                  >
+                                    <span>{col}</span>
+                                    {isActive && renderSortIcon(k)}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
                         </th>
                         <th
-                          rowSpan={2}
-                          onClick={() => toggleSort('KUALITAS')}
-                          className="py-2.5 px-3 border-r border-slate-200 cursor-pointer hover:bg-slate-200/70 min-w-[170px] align-middle"
-                        >
-                          <span className="inline-flex items-center gap-1">
-                            Kualitas {renderSortIcon('KUALITAS')}
-                          </span>
-                        </th>
-                        <th
-                          rowSpan={2}
-                          onClick={() => toggleSort('PASAR')}
-                          className="py-2.5 px-3 border-r border-slate-200 cursor-pointer hover:bg-slate-200/70 min-w-[150px] align-middle"
-                        >
-                          <span className="inline-flex items-center gap-1">
-                            Pasar & Jenis {renderSortIcon('PASAR')}
-                          </span>
-                        </th>
-                        <th
-                          rowSpan={2}
-                          onClick={() => toggleSort('RESPONDEN')}
-                          className="py-2.5 px-3 border-r border-slate-200 cursor-pointer hover:bg-slate-200/70 min-w-[140px] align-middle"
-                        >
-                          <span className="inline-flex items-center gap-1">
-                            Nama Responden {renderSortIcon('RESPONDEN')}
-                          </span>
-                        </th>
-                        <th
-                          colSpan={meta.periodCols.length}
-                          className="py-1.5 px-2 text-center border-b border-r border-sky-200 bg-sky-100/80 text-sky-950 font-bold whitespace-nowrap"
-                        >
-                          Harga Bulan Sebelumnya (N-1)
-                        </th>
-                        <th
-                          colSpan={meta.periodCols.length}
-                          className="py-1.5 px-2 text-center border-b border-r border-amber-200 bg-amber-100/80 text-amber-950 font-bold whitespace-nowrap"
-                        >
-                          Harga Bulan Berjalan (N)
-                        </th>
-                        <th
-                          rowSpan={2}
                           onClick={() => toggleSort('AVG_PREV')}
-                          className="py-2.5 px-2.5 text-right border-r border-slate-200 cursor-pointer hover:bg-slate-200/70 whitespace-nowrap align-middle"
+                          className="py-2 px-1.5 text-right border-r border-slate-200 cursor-pointer hover:bg-slate-200/70 align-middle"
                         >
-                          <span className="inline-flex items-center justify-end gap-1">
+                          <span className="inline-flex items-center justify-end gap-0.5">
                             Rata² N-1 {renderSortIcon('AVG_PREV')}
                           </span>
                         </th>
                         <th
-                          rowSpan={2}
                           onClick={() => toggleSort('AVG_CURR')}
-                          className="py-2.5 px-2.5 text-right border-r border-slate-200 cursor-pointer hover:bg-slate-200/70 whitespace-nowrap align-middle"
+                          className="py-2 px-1.5 text-right border-r border-slate-200 cursor-pointer hover:bg-slate-200/70 align-middle"
                         >
-                          <span className="inline-flex items-center justify-end gap-1">
+                          <span className="inline-flex items-center justify-end gap-0.5">
                             Rata² N {renderSortIcon('AVG_CURR')}
                           </span>
                         </th>
                         <th
-                          rowSpan={2}
                           onClick={() => toggleSort('RH')}
-                          className="py-2.5 px-3 text-right border-r border-slate-200 cursor-pointer hover:bg-slate-200/70 whitespace-nowrap align-middle"
+                          className="py-2 px-1.5 text-right border-r border-slate-200 cursor-pointer hover:bg-slate-200/70 align-middle"
                         >
-                          <span className="inline-flex items-center justify-end gap-1">
-                            RH Responden {renderSortIcon('RH')}
+                          <span className="inline-flex items-center justify-end gap-0.5">
+                            RH {renderSortIcon('RH')}
                           </span>
                         </th>
                         <th
-                          rowSpan={2}
-                          onClick={() => toggleSort('PCT')}
-                          className="py-2.5 px-3 text-right cursor-pointer hover:bg-slate-200/70 whitespace-nowrap align-middle"
+                          onClick={() => toggleSort('FLAGGED')}
+                          className="py-2 px-2 text-left cursor-pointer hover:bg-slate-200/70 align-middle"
                         >
-                          <span className="inline-flex items-center justify-end gap-1">
-                            Perubahan {renderSortIcon('PCT')}
+                          <span className="inline-flex items-center gap-1">
+                            Catatan &amp; Perbaikan {renderSortIcon('FLAGGED')}
                           </span>
                         </th>
-                      </tr>
-
-                      <tr>
-                        {meta.periodCols.map((col, idx) => {
-                          const k: RespSortKey = `PREV_${idx}`;
-                          return (
-                            <th
-                              key={`prev-${col}`}
-                              onClick={() => toggleSort(k)}
-                              className="py-1.5 px-2.5 text-right border-r border-sky-200/80 bg-sky-50 text-sky-900 cursor-pointer hover:bg-sky-100 whitespace-nowrap"
-                              title={`Harga N-1 ${col}`}
-                            >
-                              <span className="inline-flex items-center justify-end gap-1">
-                                {col} {renderSortIcon(k)}
-                              </span>
-                            </th>
-                          );
-                        })}
-                        {meta.periodCols.map((col, idx) => {
-                          const k: RespSortKey = `CURR_${idx}`;
-                          return (
-                            <th
-                              key={`curr-${col}`}
-                              onClick={() => toggleSort(k)}
-                              className="py-1.5 px-2.5 text-right border-r border-amber-200/80 bg-amber-50 text-amber-900 cursor-pointer hover:bg-amber-100 whitespace-nowrap"
-                              title={`Harga N ${col}`}
-                            >
-                              <span className="inline-flex items-center justify-end gap-1">
-                                {col} {renderSortIcon(k)}
-                              </span>
-                            </th>
-                          );
-                        })}
                       </tr>
                     </thead>
 
                     <tbody className="divide-y divide-slate-100">
                       {pagedRows.length === 0 ? (
                         <tr>
-                          <td colSpan={totalTableCols} className="py-10 text-center text-slate-500">
+                          <td
+                            colSpan={hidePrevPrice ? 7 : 8}
+                            className="py-10 text-center text-slate-600 font-medium"
+                          >
                             Tidak ada observasi responden yang cocok dengan filter.
                           </td>
                         </tr>
                       ) : (
                         pagedRows.map((obs) => {
-                          const pctChange =
-                            obs.priceRelative !== null ? obs.priceRelative - 100 : null;
+                          const isFlagged = Boolean(obs.perluPerbaikan);
                           return (
-                            <tr key={obs.id} className="hover:bg-slate-50/90 transition-colors">
-                              <td className="py-2 px-3 border-r border-slate-100">
-                                <span className="font-mono text-[11px] text-slate-500 block">
-                                  {obs.kodeKomoditas}
-                                </span>
-                                <span className="font-semibold text-slate-900">
+                            <tr
+                              key={obs.id}
+                              className={
+                                isFlagged
+                                  ? 'bg-rose-50/90 hover:bg-rose-100/70 transition-colors align-top'
+                                  : 'hover:bg-slate-50/90 transition-colors align-top'
+                              }
+                            >
+                              <td
+                                className={`py-2 px-2 border-r border-slate-100 ${
+                                  isFlagged ? 'border-l-4 border-l-rose-600' : ''
+                                }`}
+                              >
+                                <div
+                                  className="font-bold text-slate-950 truncate"
+                                  title={`${obs.kodeKomoditas} — ${obs.komoditas}`}
+                                >
+                                  <span className="font-mono text-[10.5px] font-bold text-slate-700 mr-1">
+                                    {obs.kodeKomoditas}
+                                  </span>
                                   {obs.komoditas}
-                                </span>
-                              </td>
-                              <td className="py-2 px-3 border-r border-slate-100">
-                                <span className="text-slate-800 font-medium block">
+                                </div>
+                                <div
+                                  className="text-[11px] font-medium text-slate-800 truncate mt-0.5"
+                                  title={obs.kualitas}
+                                >
                                   {obs.kualitas}
-                                </span>
-                                <span className="font-mono text-[10px] text-slate-500">
+                                </div>
+                                <div className="font-mono text-[10px] font-medium text-slate-600 truncate mt-0.5">
                                   {obs.kodeKualitas} · Bobot {formatNumber(obs.bobotKualitas, 2)}
-                                </span>
+                                </div>
+                                {isFlagged && (
+                                  <span className="mt-1 inline-flex items-center gap-1 rounded bg-rose-100 px-1.5 py-0.5 text-[9.5px] font-bold text-rose-800 border border-rose-300">
+                                    <Flag className="h-2.5 w-2.5" /> Perlu Perbaikan
+                                  </span>
+                                )}
                               </td>
-                              <td className="py-2 px-3 border-r border-slate-100">
-                                <span className="text-slate-800 block">{obs.pasar}</span>
-                                <span className="text-[10px] text-slate-500">
+                              <td className="py-2 px-2 border-r border-slate-100">
+                                <div
+                                  className="font-bold text-slate-950 truncate"
+                                  title={obs.namaResponden}
+                                >
+                                  {obs.namaResponden}
+                                </div>
+                                <div
+                                  className="text-[11px] font-medium text-slate-800 truncate mt-0.5"
+                                  title={`${obs.pasar} (${obs.jenisPasar})`}
+                                >
+                                  {obs.pasar}
+                                </div>
+                                <div className="text-[10px] font-medium text-slate-600 truncate mt-0.5">
                                   {obs.jenisPasar}
-                                </span>
-                              </td>
-                              <td className="py-2 px-3 border-r border-slate-100 font-semibold text-slate-900">
-                                {obs.namaResponden}
+                                </div>
                               </td>
 
-                              {meta.periodCols.map((col, idx) => {
-                                const val = obs.prevPrices[idx] ?? null;
-                                return (
-                                  <td
-                                    key={`${obs.id}-prev-${col}`}
-                                    className="py-2 px-2.5 text-right font-mono text-[11px] tabular-nums border-r border-slate-100 bg-sky-50/20 text-slate-600 whitespace-nowrap"
-                                  >
-                                    {val ? formatNumber(val, 0) : '—'}
-                                  </td>
-                                );
-                              })}
+                              {!hidePrevPrice && (
+                                <td className="py-1.5 px-2 border-r border-slate-100 bg-sky-50/40">
+                                  {meta.periodCols.length === 1 ? (
+                                    <div className="rounded border border-sky-200/80 bg-white/90 px-2 py-1 text-right font-mono text-[11.5px] font-semibold tabular-nums text-slate-900">
+                                      {obs.prevPrices[0] ? formatNumber(obs.prevPrices[0], 0) : '—'}
+                                    </div>
+                                  ) : (
+                                    <div className="grid grid-cols-2 gap-1 font-mono text-[10.5px] tabular-nums">
+                                      {meta.periodCols.map((col, idx) => {
+                                        const val = obs.prevPrices[idx] ?? null;
+                                        return (
+                                          <div
+                                            key={`${obs.id}-prev-${col}`}
+                                            className="flex items-center justify-between gap-1 rounded border border-sky-200/80 bg-white/95 px-1.5 py-0.5"
+                                          >
+                                            <span className="text-[9.5px] font-bold text-sky-900">
+                                              {col}
+                                            </span>
+                                            <span
+                                              className={
+                                                val
+                                                  ? 'font-semibold text-slate-900'
+                                                  : 'text-slate-400'
+                                              }
+                                            >
+                                              {val ? formatNumber(val, 0) : '—'}
+                                            </span>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
+                                </td>
+                              )}
 
-                              {meta.periodCols.map((col, idx) => {
-                                const val = obs.currPrices[idx] ?? null;
-                                return (
-                                  <td
-                                    key={`${obs.id}-curr-${col}`}
-                                    className="py-2 px-2.5 text-right font-mono text-[11px] tabular-nums border-r border-slate-100 bg-amber-50/20 text-slate-900 font-medium whitespace-nowrap"
-                                  >
-                                    {val ? formatNumber(val, 0) : '—'}
-                                  </td>
-                                );
-                              })}
+                              <td className="py-1.5 px-2 border-r border-slate-100 bg-amber-50/40">
+                                {meta.periodCols.length === 1 ? (
+                                  <div className="rounded border border-amber-200/90 bg-white/95 px-2 py-1 text-right font-mono text-[11.5px] font-bold tabular-nums text-slate-950">
+                                    {obs.currPrices[0] ? formatNumber(obs.currPrices[0], 0) : '—'}
+                                  </div>
+                                ) : (
+                                  <div className="grid grid-cols-2 gap-1 font-mono text-[10.5px] tabular-nums">
+                                    {meta.periodCols.map((col, idx) => {
+                                      const val = obs.currPrices[idx] ?? null;
+                                      return (
+                                        <div
+                                          key={`${obs.id}-curr-${col}`}
+                                          className="flex items-center justify-between gap-1 rounded border border-amber-200/90 bg-white/95 px-1.5 py-0.5"
+                                        >
+                                          <span className="text-[9.5px] font-bold text-amber-950">
+                                            {col}
+                                          </span>
+                                          <span
+                                            className={
+                                              val
+                                                ? 'font-bold text-slate-950'
+                                                : 'text-slate-400'
+                                            }
+                                          >
+                                            {val ? formatNumber(val, 0) : '—'}
+                                          </span>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                              </td>
 
-                              <td className="py-2 px-2.5 text-right font-mono tabular-nums text-slate-600 border-r border-slate-100 whitespace-nowrap">
+                              <td className="py-2 px-1.5 text-right font-mono text-[11.5px] tabular-nums font-semibold text-slate-800 border-r border-slate-100 truncate">
                                 {obs.prevAvgPrice ? formatNumber(obs.prevAvgPrice, 0) : '—'}
                               </td>
-                              <td className="py-2 px-2.5 text-right font-mono tabular-nums font-semibold text-slate-900 border-r border-slate-100 whitespace-nowrap">
+                              <td className="py-2 px-1.5 text-right font-mono text-[11.5px] tabular-nums font-bold text-slate-950 border-r border-slate-100 truncate">
                                 {obs.currAvgPrice ? formatNumber(obs.currAvgPrice, 0) : '—'}
                               </td>
                               <td
-                                className={`py-2 px-3 text-right font-mono tabular-nums border-r border-slate-100 whitespace-nowrap ${rhColor(
+                                className={`py-2 px-1.5 text-right font-mono text-[11.5px] tabular-nums border-r border-slate-100 truncate ${rhColor(
                                   obs.priceRelative
                                 )}`}
                               >
                                 {obs.priceRelative ? formatIndex(obs.priceRelative, 3) : 'Kosong'}
                               </td>
-                              <td
-                                className={`py-2 px-3 text-right font-mono tabular-nums whitespace-nowrap ${rhColor(
-                                  obs.priceRelative
-                                )}`}
-                              >
-                                {pctChange !== null ? formatSignedPct(pctChange, 2) : '—'}
+                              <td className="py-1.5 px-2">
+                                <div className="space-y-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      onUpdateObservationAnnotation?.(
+                                        targetRegion,
+                                        frequency,
+                                        obs.id,
+                                        { perluPerbaikan: !isFlagged }
+                                      )
+                                    }
+                                    className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-bold transition-colors ${
+                                      isFlagged
+                                        ? 'bg-rose-600 text-white hover:bg-rose-700'
+                                        : 'border border-slate-300 bg-white text-slate-800 hover:bg-slate-100'
+                                    }`}
+                                  >
+                                    <Flag className="h-3 w-3" />
+                                    <span>
+                                      {isFlagged ? 'Perlu Perbaikan' : 'Tandai Perbaikan'}
+                                    </span>
+                                  </button>
+                                  <ObservationNoteInput
+                                    value={obs.catatan ?? ''}
+                                    flagged={isFlagged}
+                                    onCommit={(nextNote) =>
+                                      onUpdateObservationAnnotation?.(
+                                        targetRegion,
+                                        frequency,
+                                        obs.id,
+                                        { catatan: nextNote }
+                                      )
+                                    }
+                                  />
+                                </div>
                               </td>
                             </tr>
                           );
