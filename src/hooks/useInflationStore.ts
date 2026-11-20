@@ -26,6 +26,7 @@ import {
 import { isSupabaseConfigured, type SupabaseConnectionStatus } from '../lib/supabase';
 import {
   buildRegionUpsertRows,
+  fetchAvailablePeriodsFromSupabase,
   fetchLatestNk0BaselineForRegions,
   fetchPeriodLKFromSupabase,
   fetchRespondentDatasetsFromSupabase,
@@ -80,11 +81,12 @@ function createInitialState(): PersistedInflationState {
 function loadPersistedState(): {
   state: PersistedInflationState;
   legacyRespondentDatasets: Record<string, RespondentRHDataset>;
+  hasSavedPeriod: boolean;
 } {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) {
-      return { state: createInitialState(), legacyRespondentDatasets: {} };
+      return { state: createInitialState(), legacyRespondentDatasets: {}, hasSavedPeriod: false };
     }
     const parsed = JSON.parse(raw) as PersistedInflationState;
     if (
@@ -93,7 +95,7 @@ function loadPersistedState(): {
       !parsed.kabKotaInputs ||
       !parsed.kabKotaInputs['6107']
     ) {
-      return { state: createInitialState(), legacyRespondentDatasets: {} };
+      return { state: createInitialState(), legacyRespondentDatasets: {}, hasSavedPeriod: false };
     }
 
     const legacyRespondentDatasets = normalizeRespondentDatasetsMap(parsed.respondentDatasets);
@@ -119,6 +121,12 @@ function loadPersistedState(): {
       }
     }
 
+    const hasSavedPeriod = Boolean(
+      parsed.period &&
+        Number.isFinite(parsed.period.year) &&
+        Number.isFinite(parsed.period.month)
+    );
+
     return {
       state: {
         version: 2,
@@ -130,9 +138,10 @@ function loadPersistedState(): {
         respondentDatasets: {},
       },
       legacyRespondentDatasets,
+      hasSavedPeriod,
     };
   } catch {
-    return { state: createInitialState(), legacyRespondentDatasets: {} };
+    return { state: createInitialState(), legacyRespondentDatasets: {}, hasSavedPeriod: false };
   }
 }
 
@@ -140,6 +149,7 @@ export function useInflationStore() {
   const initialLoadRef = useRef<{
     state: PersistedInflationState;
     legacyRespondentDatasets: Record<string, RespondentRHDataset>;
+    hasSavedPeriod: boolean;
   } | null>(null);
   if (!initialLoadRef.current) {
     initialLoadRef.current = loadPersistedState();
@@ -150,6 +160,7 @@ export function useInflationStore() {
     Record<string, RespondentRHDataset>
   >(initialLoadRef.current.legacyRespondentDatasets);
   const respondentHydratedRef = useRef(false);
+  const hasSavedPeriodRef = useRef(initialLoadRef.current.hasSavedPeriod);
 
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -158,6 +169,10 @@ export function useInflationStore() {
     isSupabaseConfigured ? 'syncing' : 'local'
   );
   const [supabaseError, setSupabaseError] = useState<string | null>(null);
+  const [availablePeriods, setAvailablePeriods] = useState<PeriodSelection[]>([]);
+  const [currentPeriodHasSupabaseData, setCurrentPeriodHasSupabaseData] = useState<boolean | null>(
+    null
+  );
   const lastFetchedPeriodRef = useRef<string | null>(null);
 
   // Hydrate respondent datasets from IndexedDB (migrating any legacy localStorage copy)
@@ -209,18 +224,39 @@ export function useInflationStore() {
     setSupabaseError(null);
 
     try {
-      const [lkResult, logsResult, respResult] = await Promise.all([
+      const [lkResult, logsResult, respResult, periodsResult] = await Promise.all([
         fetchPeriodLKFromSupabase(targetPeriod),
         fetchUploadLogsFromSupabase(targetPeriod).catch(() => null),
         fetchRespondentDatasetsFromSupabase(
           targetPeriod,
           stateRef.current.customHierarchyNodes
         ).catch(() => null),
+        fetchAvailablePeriodsFromSupabase().catch(() => [] as PeriodSelection[]),
       ]);
+
+      setAvailablePeriods(periodsResult);
 
       const regionsFound = KAB_KOTA_CODES.filter(
         (code) => lkResult.byRegion[code] && Object.keys(lkResult.byRegion[code]!).length > 0
       );
+
+      // Jika device baru (belum ada periode tersimpan di localStorage) dan periode default kosong,
+      // otomatis lompat ke periode terbaru yang memiliki data di Supabase.
+      if (
+        regionsFound.length === 0 &&
+        !hasSavedPeriodRef.current &&
+        periodsResult.length > 0 &&
+        (periodsResult[0].year !== targetPeriod.year || periodsResult[0].month !== targetPeriod.month)
+      ) {
+        hasSavedPeriodRef.current = true;
+        setState((prev) => ({
+          ...prev,
+          period: periodsResult[0],
+        }));
+        return;
+      }
+
+      setCurrentPeriodHasSupabaseData(regionsFound.length > 0);
       const missingRegions = KAB_KOTA_CODES.filter((code) => !regionsFound.includes(code));
 
       // Carry forward NK0 Pakom from latest stored Supabase period for regions not yet uploaded this month
@@ -337,6 +373,7 @@ export function useInflationStore() {
   );
 
   const setPeriod = useCallback((period: PeriodSelection) => {
+    hasSavedPeriodRef.current = true;
     setState((prev) => ({
       ...prev,
       period,
@@ -510,6 +547,12 @@ export function useInflationStore() {
             unmatchedCount: l.unmatchedCount,
           }))
         );
+        setCurrentPeriodHasSupabaseData(true);
+        setAvailablePeriods((prev) => {
+          const exists = prev.some((p) => p.year === period.year && p.month === period.month);
+          if (exists) return prev;
+          return [period, ...prev].sort((a, b) => (b.year !== a.year ? b.year - a.year : b.month - a.month));
+        });
         setConnectionStatus('connected');
         return { syncedToSupabase: true, savedRows };
       } catch (err) {
@@ -639,6 +682,16 @@ export function useInflationStore() {
           };
         });
 
+        setCurrentPeriodHasSupabaseData(true);
+        setAvailablePeriods((prev) => {
+          const exists = prev.some(
+            (p) => p.year === currentPeriod.year && p.month === currentPeriod.month
+          );
+          if (exists) return prev;
+          return [currentPeriod, ...prev].sort((a, b) =>
+            b.year !== a.year ? b.year - a.year : b.month - a.month
+          );
+        });
         setConnectionStatus('connected');
         return {
           totalRolledRows: res.totalRolledRows,
@@ -749,6 +802,8 @@ export function useInflationStore() {
     respondentDatasets,
     connectionStatus,
     supabaseError,
+    availablePeriods,
+    currentPeriodHasSupabaseData,
     setPeriod,
     applyMonthlyUpload,
     updateCommodityInput,

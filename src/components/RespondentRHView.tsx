@@ -1047,9 +1047,9 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
                       {hidePrevPrice ? (
                         frequency === 'MINGGUAN' ? (
                           <>
-                            <col className="w-[20%]" />
-                            <col className="w-[15%]" />
-                            <col className="w-[25%]" />
+                            <col className="w-[18%]" />
+                            <col className="w-[14%]" />
+                            <col className="w-[28%]" />
                             <col className="w-[7.5%]" />
                             <col className="w-[7.5%]" />
                             <col className="w-[7%]" />
@@ -1078,14 +1078,14 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
                         )
                       ) : frequency === 'MINGGUAN' ? (
                         <>
-                          <col className="w-[17%]" />
-                          <col className="w-[12%]" />
-                          <col className="w-[18%]" />
-                          <col className="w-[18%]" />
-                          <col className="w-[6.5%]" />
-                          <col className="w-[6.5%]" />
-                          <col className="w-[6.5%]" />
-                          <col className="w-[15.5%]" />
+                          <col className="w-[15%]" />
+                          <col className="w-[11%]" />
+                          <col className="w-[21%]" />
+                          <col className="w-[21%]" />
+                          <col className="w-[6%]" />
+                          <col className="w-[6%]" />
+                          <col className="w-[5.5%]" />
+                          <col className="w-[14.5%]" />
                         </>
                       ) : frequency === 'DWIMINGGUAN' ? (
                         <>
@@ -1325,10 +1325,36 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
                               </td>
 
                               {!hidePrevPrice && (
-                                <td className="py-1.5 px-2 border-r border-slate-100 bg-sky-50/40">
+                                <td className="py-1.5 px-1.5 border-r border-slate-100 bg-sky-50/40">
                                   {meta.periodCols.length === 1 ? (
                                     <div className="rounded border border-sky-200/80 bg-white/90 px-2 py-1 text-right font-mono text-[11.5px] font-semibold tabular-nums text-slate-900">
                                       {obs.prevPrices[0] ? formatNumber(obs.prevPrices[0], 0) : '—'}
+                                    </div>
+                                  ) : meta.periodCols.length === 5 ? (
+                                    <div className="grid grid-cols-5 gap-1 font-mono tabular-nums">
+                                      {meta.periodCols.map((col, idx) => {
+                                        const val = obs.prevPrices[idx] ?? null;
+                                        return (
+                                          <div
+                                            key={`${obs.id}-prev-${col}`}
+                                            title={`${col}: ${val ? formatNumber(val, 0) : 'Kosong'}`}
+                                            className="rounded border border-sky-200/90 bg-white/95 px-0.5 py-0.5 text-center leading-tight"
+                                          >
+                                            <div className="text-[8.5px] font-bold text-sky-900">
+                                              {col}
+                                            </div>
+                                            <div
+                                              className={`text-[10px] truncate ${
+                                                val
+                                                  ? 'font-semibold text-slate-900'
+                                                  : 'text-slate-400'
+                                              }`}
+                                            >
+                                              {val ? formatNumber(val, 0) : '—'}
+                                            </div>
+                                          </div>
+                                        );
+                                      })}
                                     </div>
                                   ) : (
                                     <div className="grid grid-cols-2 gap-1 font-mono text-[10.5px] tabular-nums">
@@ -1359,10 +1385,36 @@ export const RespondentRHView: React.FC<RespondentRHViewProps> = ({
                                 </td>
                               )}
 
-                              <td className="py-1.5 px-2 border-r border-slate-100 bg-amber-50/40">
+                              <td className="py-1.5 px-1.5 border-r border-slate-100 bg-amber-50/40">
                                 {meta.periodCols.length === 1 ? (
                                   <div className="rounded border border-amber-200/90 bg-white/95 px-2 py-1 text-right font-mono text-[11.5px] font-bold tabular-nums text-slate-950">
                                     {obs.currPrices[0] ? formatNumber(obs.currPrices[0], 0) : '—'}
+                                  </div>
+                                ) : meta.periodCols.length === 5 ? (
+                                  <div className="grid grid-cols-5 gap-1 font-mono tabular-nums">
+                                    {meta.periodCols.map((col, idx) => {
+                                      const val = obs.currPrices[idx] ?? null;
+                                      return (
+                                        <div
+                                          key={`${obs.id}-curr-${col}`}
+                                          title={`${col}: ${val ? formatNumber(val, 0) : 'Kosong'}`}
+                                          className="rounded border border-amber-200/90 bg-white/95 px-0.5 py-0.5 text-center leading-tight"
+                                        >
+                                          <div className="text-[8.5px] font-bold text-amber-950">
+                                            {col}
+                                          </div>
+                                          <div
+                                            className={`text-[10px] truncate ${
+                                              val
+                                                ? 'font-bold text-slate-950'
+                                                : 'text-slate-400'
+                                            }`}
+                                          >
+                                            {val ? formatNumber(val, 0) : '—'}
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
                                   </div>
                                 ) : (
                                   <div className="grid grid-cols-2 gap-1 font-mono text-[10.5px] tabular-nums">

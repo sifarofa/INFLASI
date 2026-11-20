@@ -156,6 +156,48 @@ export async function fetchPeriodLKFromSupabase(period: PeriodSelection): Promis
 }
 
 /**
+ * Ambil daftar periode (tahun, bulan) unik yang sudah memiliki data di inflasi_lk_data,
+ * diurutkan dari terbaru ke terlama.
+ */
+export async function fetchAvailablePeriodsFromSupabase(
+  maxPeriods = 12
+): Promise<PeriodSelection[]> {
+  if (!supabase) return [];
+
+  const periods: PeriodSelection[] = [];
+  let cursor: PeriodSelection | null = null;
+
+  for (let i = 0; i < maxPeriods; i++) {
+    let query = supabase
+      .from('inflasi_lk_data')
+      .select('tahun,bulan')
+      .in('kode_wilayah', KAB_KOTA_CODES)
+      .order('tahun', { ascending: false })
+      .order('bulan', { ascending: false })
+      .limit(1);
+
+    if (cursor) {
+      query = query.or(
+        `tahun.lt.${cursor.year},and(tahun.eq.${cursor.year},bulan.lt.${cursor.month})`
+      );
+    }
+
+    const { data, error } = await query;
+    if (error || !data || data.length === 0) break;
+
+    const y = Number(data[0].tahun);
+    const m = Number(data[0].bulan);
+    if (!Number.isFinite(y) || !Number.isFinite(m)) break;
+
+    const found: PeriodSelection = { year: y, month: m };
+    periods.push(found);
+    cursor = found;
+  }
+
+  return periods;
+}
+
+/**
  * Tarik Pakom & NK0 (nk_dasar) terbaru dari periode lain di Supabase bagi Kab/Kota
  * yang belum memiliki entri pada periode aktif (agar NK0 selalu tersimpan lintas bulan).
  */

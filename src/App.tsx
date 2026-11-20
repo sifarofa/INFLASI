@@ -46,6 +46,8 @@ export default function App() {
     jejerRows,
     connectionStatus,
     supabaseError,
+    availablePeriods,
+    currentPeriodHasSupabaseData,
     setPeriod,
     applyMonthlyUpload,
     updateCommodityInput,
@@ -544,6 +546,31 @@ export default function App() {
                     {results[effectiveRegion].regionName}
                   </strong>
                 </span>
+                {connectionStatus === 'connected' && availablePeriods.length > 0 && (
+                  <>
+                    <span className="text-slate-300">·</span>
+                    <span className="inline-flex flex-wrap items-center gap-1.5">
+                      <span className="text-slate-500">Data di DB:</span>
+                      {availablePeriods.map((p) => {
+                        const isActive = p.year === period.year && p.month === period.month;
+                        return (
+                          <button
+                            key={`db-period-${p.year}-${p.month}`}
+                            type="button"
+                            onClick={() => setPeriod(p)}
+                            className={`rounded px-2 py-0.5 text-[11px] font-bold transition-colors ${
+                              isActive
+                                ? 'bg-emerald-100 text-emerald-900 border border-emerald-300'
+                                : 'bg-slate-100 text-slate-700 border border-slate-200 hover:bg-slate-200'
+                            }`}
+                          >
+                            {formatPeriodLabel(p)}
+                          </button>
+                        );
+                      })}
+                    </span>
+                  </>
+                )}
               </div>
 
               {isProvinsi && (
@@ -568,6 +595,31 @@ export default function App() {
             </div>
           </div>
         )}
+
+        {safeTab !== 'ranking' &&
+          connectionStatus === 'connected' &&
+          currentPeriodHasSupabaseData === false &&
+          availablePeriods.length > 0 && (
+            <div className="border-b border-amber-200 bg-amber-50/90 px-4 sm:px-6 py-2.5 text-xs text-amber-950 flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <strong>Periode {formatPeriodLabel(period)} belum memiliki data tersimpan di Supabase</strong>{' '}
+                (hanya menampilkan kerangka Pakom NK0 dengan RH = 100 / Inflasi 0,00%). Klik periode
+                berikut untuk membuka data yang sudah diunggah:
+              </div>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {availablePeriods.map((p) => (
+                  <button
+                    key={`jump-period-${p.year}-${p.month}`}
+                    type="button"
+                    onClick={() => setPeriod(p)}
+                    className="rounded-md bg-amber-900 px-2.5 py-1 text-xs font-bold text-white hover:bg-amber-950 transition-colors"
+                  >
+                    Buka {formatPeriodLabel(p)}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
         {/* Main Viewport */}
         <main className="w-full flex-1 px-3 sm:px-5 py-5">
