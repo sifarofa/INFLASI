@@ -2,9 +2,14 @@ import { supabase } from '../lib/supabase';
 import { getRegionInfo, KAB_KOTA_CODES } from '../data/regions';
 import { HIERARCHY_NODES } from '../data/masterHierarchy';
 import type {
+  AngkaSementaraDataset,
+  AngkaSementaraRegionLevel,
+  AngkaSementaraRow,
   CommodityInputRow,
+  HierarchyFlag,
   HierarchyNodeMeta,
   KabKotaCode,
+  KalbarFlagType,
   PeriodSelection,
   RespondentFrequency,
   RespondentPriceObservation,
@@ -334,6 +339,8 @@ export async function fetchUploadLogsFromSupabase(
     .select('id,tahun,bulan,jenis_upload,nama_file,jumlah_baris,created_at')
     .eq('tahun', period.year)
     .eq('bulan', period.month)
+    .not('jenis_upload', 'like', 'ANGKA_SEMENTARA%')
+    .not('jenis_upload', 'like', 'RESP_SNAPSHOT%')
     .order('created_at', { ascending: false })
     .limit(60);
 
@@ -498,6 +505,116 @@ export async function rolloverPrevMonthFromSupabase(params: {
   };
 }
 
+const RESP_SNAPSHOT_META_PREFIX = 'RESP_SNAPSHOT_META|';
+const RESP_SNAPSHOT_CHUNK_PREFIX = 'RESP_SNAPSHOT_CHUNK|';
+
+interface RespondentSnapshotMeta {
+  regionCode: KabKotaCode;
+  frequency: RespondentFrequency;
+  tahun: number;
+  bulan: number;
+  fileName: string | null;
+  loadedAt: string | null;
+  rowCount: number;
+  encoding: 'gzip-v1' | 'plain-v1';
+}
+
+function padPricesForFrequency(
+  avgPrice: number | null,
+  freq: RespondentFrequency
+): (number | null)[] {
+  const expectedLen = freq === 'MINGGUAN' ? 5 : freq === 'DWIMINGGUAN' ? 2 : 1;
+  const arr: (number | null)[] = new Array(expectedLen).fill(null);
+  arr[0] = avgPrice;
+  return arr;
+}
+
+export async function saveRespondentSnapshotToSupabase(
+  dataset: RespondentRHDataset
+): Promise<void> {
+  if (!supabase) return;
+
+  const { year, month } = dataset.period;
+  const payloadText = JSON.stringify({
+    v: 1,
+    observations: dataset.observations,
+  });
+  const { encoding, payload } = await compressTextForSupabase(payloadText);
+
+  const chunks: string[] = [];
+  for (let i = 0; i < payload.length; i += ANGKA_SEMENTARA_CHUNK_CHARS) {
+    chunks.push(payload.slice(i, i + ANGKA_SEMENTARA_CHUNK_CHARS));
+  }
+  if (chunks.length === 0) chunks.push('');
+
+  const batchId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+  for (let i = 0; i < chunks.length; i++) {
+    const { error: chunkErr } = await supabase.from('inflasi_upload_logs').insert({
+      tahun: year,
+      bulan: month,
+      jenis_upload: `${RESP_SNAPSHOT_CHUNK_PREFIX}${batchId}|${i}|${chunks.length}`,
+      nama_file: chunks[i],
+      jumlah_baris: chunks[i].length,
+    });
+    if (chunkErr) {
+      throw new Error(chunkErr.message || `Gagal menyimpan potongan snapshot responden #${i + 1}.`);
+    }
+  }
+
+  const meta: RespondentSnapshotMeta = {
+    regionCode: dataset.regionCode,
+    frequency: dataset.frequency,
+    tahun: year,
+    bulan: month,
+    fileName: dataset.fileName,
+    loadedAt: dataset.loadedAt,
+    rowCount: dataset.observations.length,
+    encoding,
+  };
+
+  const metaPrefix = `${RESP_SNAPSHOT_META_PREFIX}${year}|${month}|${dataset.regionCode}|${dataset.frequency}|`;
+  const { error: metaErr } = await supabase.from('inflasi_upload_logs').insert({
+    tahun: year,
+    bulan: month,
+    jenis_upload: `${metaPrefix}${batchId}|${chunks.length}`,
+    nama_file: JSON.stringify(meta),
+    jumlah_baris: dataset.observations.length,
+  });
+
+  if (metaErr) {
+    throw new Error(metaErr.message || 'Gagal menyimpan metadata snapshot responden ke Supabase.');
+  }
+
+  // Bersihkan snapshot META lama untuk kombinasi (tahun, bulan, wilayah, frekuensi) secara best-effort
+  try {
+    const { data: oldMetas } = await supabase
+      .from('inflasi_upload_logs')
+      .select('id,jenis_upload')
+      .eq('tahun', year)
+      .eq('bulan', month)
+      .like('jenis_upload', `${metaPrefix}%`);
+
+    for (const oldRow of oldMetas ?? []) {
+      const j = String(oldRow.jenis_upload ?? '');
+      if (j.includes(`|${batchId}|`)) continue;
+      const parts = j.split('|');
+      const oldBatchId = parts[5];
+      if (oldBatchId) {
+        await supabase
+          .from('inflasi_upload_logs')
+          .delete()
+          .like('jenis_upload', `${RESP_SNAPSHOT_CHUNK_PREFIX}${oldBatchId}|%`);
+      }
+      if (oldRow.id) {
+        await supabase.from('inflasi_upload_logs').delete().eq('id', oldRow.id);
+      }
+    }
+  } catch {
+    // Abaikan jika RLS tidak mengizinkan DELETE
+  }
+}
+
 export async function saveRespondentDatasetToSupabase(
   dataset: RespondentRHDataset
 ): Promise<number> {
@@ -544,6 +661,9 @@ export async function saveRespondentDatasetToSupabase(
     }
   }
 
+  // Simpan juga snapshot lossless (rincian M1-M5, pasar, bobot BPS, catatan & perbaikan)
+  await saveRespondentSnapshotToSupabase(dataset);
+
   return rows.length;
 }
 
@@ -553,6 +673,94 @@ export async function fetchRespondentDatasetsFromSupabase(
 ): Promise<Record<string, RespondentRHDataset>> {
   if (!supabase) return {};
 
+  const datasets: Record<string, RespondentRHDataset> = {};
+
+  // 1. Prioritaskan snapshot lossless (memuat M1-M5, Pasar, Bobot BPS, Catatan, Perbaikan Harga)
+  try {
+    const { data: metaRows } = await supabase
+      .from('inflasi_upload_logs')
+      .select('id,tahun,bulan,jenis_upload,nama_file,created_at')
+      .eq('tahun', period.year)
+      .eq('bulan', period.month)
+      .like('jenis_upload', `${RESP_SNAPSHOT_META_PREFIX}${period.year}|${period.month}|%`)
+      .order('created_at', { ascending: false })
+      .limit(60);
+
+    const seenKeys = new Set<string>();
+    for (const metaRow of (metaRows ?? []) as RawSupabaseUploadLogRow[]) {
+      const parts = String(metaRow.jenis_upload ?? '').split('|');
+      const regionCode = parts[3] ?? '';
+      const freqUpper = parts[4] ?? '';
+      const batchId = parts[5] ?? '';
+      const totalChunks = Number(parts[6] ?? 0);
+      if (
+        !isKabKotaCode(regionCode) ||
+        (freqUpper !== 'MINGGUAN' && freqUpper !== 'DWIMINGGUAN' && freqUpper !== 'BULANAN') ||
+        !batchId ||
+        !Number.isFinite(totalChunks) ||
+        totalChunks <= 0
+      ) {
+        continue;
+      }
+
+      const scopedKey = `${regionCode}_${freqUpper}`;
+      if (seenKeys.has(scopedKey)) continue;
+
+      let meta: RespondentSnapshotMeta;
+      try {
+        meta = JSON.parse(String(metaRow.nama_file ?? '{}')) as RespondentSnapshotMeta;
+      } catch {
+        continue;
+      }
+
+      const chunkStrings: string[] = [];
+      let missing = false;
+      for (let i = 0; i < totalChunks; i++) {
+        const expectedJenis = `${RESP_SNAPSHOT_CHUNK_PREFIX}${batchId}|${i}|${totalChunks}`;
+        const { data: chunkData, error: chunkErr } = await supabase
+          .from('inflasi_upload_logs')
+          .select('nama_file')
+          .eq('jenis_upload', expectedJenis)
+          .limit(1);
+        if (chunkErr || !chunkData || chunkData.length === 0) {
+          missing = true;
+          break;
+        }
+        chunkStrings.push(String(chunkData[0].nama_file ?? ''));
+      }
+      if (missing) continue;
+
+      try {
+        const jsonText = await decompressTextFromSupabase(
+          chunkStrings.join(''),
+          meta.encoding ?? 'plain-v1'
+        );
+        const parsed = JSON.parse(jsonText) as {
+          v: number;
+          observations: RespondentPriceObservation[];
+        };
+        if (Array.isArray(parsed.observations)) {
+          const freq = freqUpper as RespondentFrequency;
+          datasets[scopedKey] = {
+            regionCode,
+            period,
+            frequency: freq,
+            fileName: meta.fileName ?? 'Supabase Snapshot',
+            loadedAt: meta.loadedAt ?? metaRow.created_at ?? null,
+            observations: parsed.observations,
+            commoditySummaries: summarizeRespondentRH(parsed.observations, freq),
+          };
+          seenKeys.add(scopedKey);
+        }
+      } catch {
+        // Lewati jika snapshot korup, fallback ke inflasi_harga_responden di bawah
+      }
+    }
+  } catch {
+    // Fallback tetap berjalan melalui inflasi_harga_responden
+  }
+
+  // 2. Fallback dari tabel inflasi_harga_responden untuk dataset yang belum memiliki snapshot lossless
   const allRows: RawSupabaseRespondentRow[] = [];
   let offset = 0;
 
@@ -599,6 +807,7 @@ export async function fetchRespondentDatasetsFromSupabase(
     }
     const freq = freqUpper as RespondentFrequency;
     const scopedKey = `${regionCode}_${freq}`;
+    if (datasets[scopedKey]) continue;
 
     if (!grouped.has(scopedKey)) {
       grouped.set(scopedKey, {
@@ -632,15 +841,14 @@ export async function fetchRespondentDatasetsFromSupabase(
       pasar: '-',
       namaResponden: String(row.nama_responden ?? ''),
       frequency: freq,
-      prevPrices: [prevAvg],
-      currPrices: [currAvg],
+      prevPrices: padPricesForFrequency(prevAvg, freq),
+      currPrices: padPricesForFrequency(currAvg, freq),
       prevAvgPrice: prevAvg,
       currAvgPrice: currAvg,
       priceRelative: rhVal,
     });
   }
 
-  const datasets: Record<string, RespondentRHDataset> = {};
   for (const [scopedKey, bucket] of grouped.entries()) {
     datasets[scopedKey] = {
       regionCode: bucket.regionCode,
@@ -686,3 +894,357 @@ export function buildRegionUpsertRows(
 }
 
 export type SupabaseUploadLogKind = UploadFileKind | 'INLINE_EDIT' | 'ROLLOVER' | 'RESPONDEN_SYNC';
+
+// ============================================================================
+// SINKRONISASI DATASET RANKING INFLASI (ANGKA SEMENTARA) VIA SUPABASE
+// ============================================================================
+
+const ANGKA_SEMENTARA_CHUNK_CHARS = 320_000;
+const ANGKA_META_PREFIX = 'ANGKA_SEMENTARA_META|';
+const ANGKA_CHUNK_PREFIX = 'ANGKA_SEMENTARA_CHUNK|';
+const ANGKA_CLEAR_PREFIX = 'ANGKA_SEMENTARA_CLEAR|';
+
+interface CompactAngkaSementaraPayload {
+  v: 1;
+  regions: Array<[string, string, AngkaSementaraRegionLevel, KalbarFlagType]>;
+  commodities: Array<[string, string, string, HierarchyFlag]>;
+  rows: Array<
+    [number, number, number, number, number, number, number, number, number, number, number]
+  >;
+}
+
+interface AngkaSementaraMetaPayload {
+  fileName: string;
+  uploadedAt: string;
+  title: string;
+  tahun: number | null;
+  bulan: number | null;
+  rowCount: number;
+  encoding: 'gzip-v1' | 'plain-v1';
+}
+
+function uint8ToBase64(bytes: Uint8Array): string {
+  const SLICE = 0x8000;
+  const parts: string[] = [];
+  for (let i = 0; i < bytes.length; i += SLICE) {
+    parts.push(String.fromCharCode(...bytes.subarray(i, i + SLICE)));
+  }
+  return btoa(parts.join(''));
+}
+
+function base64ToUint8(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) {
+    out[i] = bin.charCodeAt(i);
+  }
+  return out;
+}
+
+async function compressTextForSupabase(
+  text: string
+): Promise<{ encoding: 'gzip-v1' | 'plain-v1'; payload: string }> {
+  if (typeof CompressionStream !== 'undefined') {
+    try {
+      const encoded = new TextEncoder().encode(text);
+      const copy = new Uint8Array(encoded.length);
+      copy.set(encoded);
+      const stream = new Blob([copy.buffer]).stream().pipeThrough(new CompressionStream('gzip'));
+      const buf = await new Response(stream).arrayBuffer();
+      return { encoding: 'gzip-v1', payload: uint8ToBase64(new Uint8Array(buf)) };
+    } catch {
+      // Fallback to plain JSON string
+    }
+  }
+  return { encoding: 'plain-v1', payload: text };
+}
+
+async function decompressTextFromSupabase(
+  payload: string,
+  encoding: 'gzip-v1' | 'plain-v1'
+): Promise<string> {
+  if (encoding === 'gzip-v1') {
+    if (typeof DecompressionStream === 'undefined') {
+      throw new Error('Browser tidak mendukung DecompressionStream untuk membuka dataset Angka Sementara.');
+    }
+    const bytes = base64ToUint8(payload);
+    const copy = new Uint8Array(bytes.length);
+    copy.set(bytes);
+    const stream = new Blob([copy.buffer]).stream().pipeThrough(new DecompressionStream('gzip'));
+    return await new Response(stream).text();
+  }
+  return payload;
+}
+
+function encodeAngkaSementaraDataset(dataset: AngkaSementaraDataset): CompactAngkaSementaraPayload {
+  const regionMap = new Map<string, number>();
+  const commMap = new Map<string, number>();
+  const regions: CompactAngkaSementaraPayload['regions'] = [];
+  const commodities: CompactAngkaSementaraPayload['commodities'] = [];
+  const rows: CompactAngkaSementaraPayload['rows'] = [];
+
+  for (const r of dataset.rows) {
+    const rKey = `${r.kdKota}|${r.namaKota}|${r.regionLevel}|${r.kalbarFlag}`;
+    let rIdx = regionMap.get(rKey);
+    if (rIdx === undefined) {
+      rIdx = regions.length;
+      regionMap.set(rKey, rIdx);
+      regions.push([r.kdKota, r.namaKota, r.regionLevel, r.kalbarFlag]);
+    }
+
+    const cKey = `${r.flag}|${r.kode}|${r.rawKode}|${r.nama}`;
+    let cIdx = commMap.get(cKey);
+    if (cIdx === undefined) {
+      cIdx = commodities.length;
+      commMap.set(cKey, cIdx);
+      commodities.push([r.kode, r.rawKode, r.nama, r.flag]);
+    }
+
+    rows.push([
+      rIdx,
+      cIdx,
+      r.tahun,
+      r.bulan,
+      r.ihk,
+      r.infMom,
+      r.infYtd,
+      r.infYoy,
+      r.andilMom,
+      r.andilYtd,
+      r.andilYoy,
+    ]);
+  }
+
+  return { v: 1, regions, commodities, rows };
+}
+
+function decodeAngkaSementaraDataset(
+  meta: AngkaSementaraMetaPayload,
+  compact: CompactAngkaSementaraPayload
+): AngkaSementaraDataset {
+  const rows: AngkaSementaraRow[] = compact.rows.map((tuple) => {
+    const reg = compact.regions[tuple[0]];
+    const comm = compact.commodities[tuple[1]];
+    return {
+      tahun: tuple[2],
+      bulan: tuple[3],
+      kdKota: reg?.[0] ?? '',
+      namaKota: reg?.[1] ?? '',
+      kode: comm?.[0] ?? '',
+      rawKode: comm?.[1] ?? '',
+      nama: comm?.[2] ?? '',
+      flag: (comm?.[3] ?? 3) as HierarchyFlag,
+      ihk: tuple[4],
+      infMom: tuple[5],
+      infYtd: tuple[6],
+      infYoy: tuple[7],
+      andilMom: tuple[8],
+      andilYtd: tuple[9],
+      andilYoy: tuple[10],
+      regionLevel: reg?.[2] ?? 'KABKOTA',
+      kalbarFlag: reg?.[3] ?? 'NON_KALBAR',
+    };
+  });
+
+  return {
+    fileName: meta.fileName,
+    uploadedAt: meta.uploadedAt,
+    title: meta.title,
+    tahun: meta.tahun,
+    bulan: meta.bulan,
+    rows,
+  };
+}
+
+function resolveLogPeriod(tahun: number | null, bulan: number | null): { tahun: number; bulan: number } {
+  const now = new Date();
+  const safeTahun =
+    tahun && Number.isFinite(tahun) && tahun >= 2000 && tahun <= 2100
+      ? Math.trunc(tahun)
+      : now.getFullYear();
+  const safeBulan =
+    bulan && Number.isFinite(bulan) && bulan >= 1 && bulan <= 12
+      ? Math.trunc(bulan)
+      : now.getMonth() + 1;
+  return { tahun: safeTahun, bulan: safeBulan };
+}
+
+export async function saveAngkaSementaraToSupabase(
+  dataset: AngkaSementaraDataset
+): Promise<{ totalChunks: number; rowCount: number }> {
+  if (!supabase) {
+    throw new Error('Supabase belum terhubung.');
+  }
+
+  const compact = encodeAngkaSementaraDataset(dataset);
+  const compactJson = JSON.stringify(compact);
+  const { encoding, payload } = await compressTextForSupabase(compactJson);
+
+  const chunks: string[] = [];
+  for (let i = 0; i < payload.length; i += ANGKA_SEMENTARA_CHUNK_CHARS) {
+    chunks.push(payload.slice(i, i + ANGKA_SEMENTARA_CHUNK_CHARS));
+  }
+  if (chunks.length === 0) chunks.push('');
+
+  const batchId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const { tahun, bulan } = resolveLogPeriod(dataset.tahun, dataset.bulan);
+
+  // 1. Upload semua chunk terlebih dahulu agar batch bersifat atomik sebelum META muncul
+  for (let i = 0; i < chunks.length; i++) {
+    const { error: chunkErr } = await supabase.from('inflasi_upload_logs').insert({
+      tahun,
+      bulan,
+      jenis_upload: `${ANGKA_CHUNK_PREFIX}${batchId}|${i}|${chunks.length}`,
+      nama_file: chunks[i],
+      jumlah_baris: chunks[i].length,
+    });
+    if (chunkErr) {
+      throw new Error(chunkErr.message || `Gagal menyimpan potongan data #${i + 1} ke Supabase.`);
+    }
+  }
+
+  // 2. Simpan row META terakhir sebagai penanda bahwa seluruh chunk sudah siap dibaca device lain
+  const metaPayload: AngkaSementaraMetaPayload = {
+    fileName: dataset.fileName,
+    uploadedAt: dataset.uploadedAt,
+    title: dataset.title,
+    tahun: dataset.tahun,
+    bulan: dataset.bulan,
+    rowCount: dataset.rows.length,
+    encoding,
+  };
+
+  const { error: metaErr } = await supabase.from('inflasi_upload_logs').insert({
+    tahun,
+    bulan,
+    jenis_upload: `${ANGKA_META_PREFIX}${batchId}|${chunks.length}`,
+    nama_file: JSON.stringify(metaPayload),
+    jumlah_baris: dataset.rows.length,
+  });
+
+  if (metaErr) {
+    throw new Error(metaErr.message || 'Gagal menyimpan metadata Ranking Inflasi ke Supabase.');
+  }
+
+  // 3. Bersihkan snapshot ANGKA_SEMENTARA lama secara best-effort agar tabel tetap ringkas
+  try {
+    await supabase
+      .from('inflasi_upload_logs')
+      .delete()
+      .like('jenis_upload', 'ANGKA_SEMENTARA_%')
+      .not('jenis_upload', 'like', `%${batchId}%`);
+  } catch {
+    // Abaikan jika kebijakan RLS hanya mengizinkan SELECT/INSERT
+  }
+
+  return { totalChunks: chunks.length, rowCount: dataset.rows.length };
+}
+
+export type FetchAngkaSementaraResult =
+  | { status: 'EMPTY' }
+  | { status: 'CLEARED'; clearedAt: string }
+  | { status: 'FOUND'; dataset: AngkaSementaraDataset; syncedAt: string };
+
+export async function fetchAngkaSementaraFromSupabase(): Promise<FetchAngkaSementaraResult> {
+  if (!supabase) return { status: 'EMPTY' };
+
+  const { data: metaRows, error: metaErr } = await supabase
+    .from('inflasi_upload_logs')
+    .select('id,tahun,bulan,jenis_upload,nama_file,jumlah_baris,created_at')
+    .or(`jenis_upload.like.${ANGKA_META_PREFIX}%,jenis_upload.like.${ANGKA_CLEAR_PREFIX}%`)
+    .order('created_at', { ascending: false })
+    .limit(5);
+
+  if (metaErr) {
+    throw new Error(metaErr.message || 'Gagal memeriksa data Ranking Inflasi di Supabase.');
+  }
+
+  if (!metaRows || metaRows.length === 0) {
+    return { status: 'EMPTY' };
+  }
+
+  for (const candidate of metaRows as RawSupabaseUploadLogRow[]) {
+    const jenis = String(candidate.jenis_upload ?? '');
+    if (jenis.startsWith(ANGKA_CLEAR_PREFIX)) {
+      return {
+        status: 'CLEARED',
+        clearedAt: candidate.created_at ?? new Date().toISOString(),
+      };
+    }
+
+    if (!jenis.startsWith(ANGKA_META_PREFIX)) continue;
+
+    const parts = jenis.split('|');
+    const batchId = parts[1];
+    const totalChunks = Number(parts[2] ?? 0);
+    if (!batchId || !Number.isFinite(totalChunks) || totalChunks <= 0) continue;
+
+    let meta: AngkaSementaraMetaPayload;
+    try {
+      meta = JSON.parse(String(candidate.nama_file ?? '{}')) as AngkaSementaraMetaPayload;
+    } catch {
+      continue;
+    }
+
+    const chunkStrings: string[] = [];
+    let missingChunk = false;
+    for (let i = 0; i < totalChunks; i++) {
+      const expectedJenis = `${ANGKA_CHUNK_PREFIX}${batchId}|${i}|${totalChunks}`;
+      const { data: chunkData, error: chunkErr } = await supabase
+        .from('inflasi_upload_logs')
+        .select('nama_file')
+        .eq('jenis_upload', expectedJenis)
+        .limit(1);
+
+      if (chunkErr || !chunkData || chunkData.length === 0) {
+        missingChunk = true;
+        break;
+      }
+      chunkStrings.push(String(chunkData[0].nama_file ?? ''));
+    }
+
+    if (missingChunk) continue;
+
+    const joined = chunkStrings.join('');
+    const jsonText = await decompressTextFromSupabase(joined, meta.encoding ?? 'plain-v1');
+    const compact = JSON.parse(jsonText) as CompactAngkaSementaraPayload;
+    const dataset = decodeAngkaSementaraDataset(meta, compact);
+
+    return {
+      status: 'FOUND',
+      dataset,
+      syncedAt: candidate.created_at ?? meta.uploadedAt ?? new Date().toISOString(),
+    };
+  }
+
+  return { status: 'EMPTY' };
+}
+
+export async function clearAngkaSementaraInSupabase(): Promise<void> {
+  if (!supabase) return;
+
+  const batchId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const now = new Date();
+
+  try {
+    await supabase
+      .from('inflasi_upload_logs')
+      .delete()
+      .like('jenis_upload', 'ANGKA_SEMENTARA_%');
+  } catch {
+    // Abaikan jika DELETE dibatasi RLS; marker CLEAR tetap menandai status terbaru
+  }
+
+  const { error } = await supabase.from('inflasi_upload_logs').insert({
+    tahun: now.getFullYear(),
+    bulan: now.getMonth() + 1,
+    jenis_upload: `${ANGKA_CLEAR_PREFIX}${batchId}`,
+    nama_file: JSON.stringify({ clearedAt: now.toISOString() }),
+    jumlah_baris: 0,
+  });
+
+  if (error) {
+    throw new Error(error.message || 'Gagal menghapus snapshot Ranking Inflasi di Supabase.');
+  }
+}
+

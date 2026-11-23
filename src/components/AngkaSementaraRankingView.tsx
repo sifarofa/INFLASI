@@ -1,12 +1,16 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowDown,
   ArrowUp,
   ArrowUpDown,
+  Database,
   Download,
   FileSpreadsheet,
   Flag,
+  HardDrive,
+  Loader2,
   MapPin,
+  RefreshCw,
   Search,
   Trash2,
   Trophy,
@@ -30,6 +34,12 @@ import {
   loadAngkaSementaraDataset,
   saveAngkaSementaraDataset,
 } from '../utils/angkaSementaraStorage';
+import { isSupabaseConfigured } from '../lib/supabase';
+import {
+  clearAngkaSementaraInSupabase,
+  fetchAngkaSementaraFromSupabase,
+  saveAngkaSementaraToSupabase,
+} from '../utils/supabaseSync';
 import { exportAngkaSementaraRankingWorkbook } from '../utils/excelExporter';
 import { formatAndil, formatIndex, formatSignedPct } from '../utils/formatters';
 
@@ -84,6 +94,10 @@ export const AngkaSementaraRankingView: React.FC = () => {
   const [isRestoring, setIsRestoring] = useState<boolean>(true);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'local' | 'error'>(
+    isSupabaseConfigured ? 'syncing' : 'local'
+  );
+  const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState<boolean>(false);
 
   const [viewMode, setViewMode] = useState<ViewMode>('CROSS_REGION');
@@ -110,19 +124,73 @@ export const AngkaSementaraRankingView: React.FC = () => {
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  const syncFromSupabase = useCallback(async (localCached: AngkaSementaraDataset | null) => {
+    if (!isSupabaseConfigured) {
+      setSyncStatus('local');
+      return;
+    }
+    setSyncStatus('syncing');
+    setSyncMessage(null);
+    try {
+      const remote = await fetchAngkaSementaraFromSupabase();
+      if (remote.status === 'FOUND') {
+        const isDifferent =
+          !localCached ||
+          localCached.uploadedAt !== remote.dataset.uploadedAt ||
+          localCached.fileName !== remote.dataset.fileName ||
+          localCached.rows.length !== remote.dataset.rows.length;
+        if (isDifferent) {
+          setDataset(remote.dataset);
+          await saveAngkaSementaraDataset(remote.dataset);
+          setPage(1);
+        }
+        setSyncStatus('synced');
+        setSyncMessage('Tersinkronisasi dengan Supabase');
+      } else if (remote.status === 'CLEARED') {
+        if (
+          localCached &&
+          new Date(localCached.uploadedAt).getTime() <= new Date(remote.clearedAt).getTime()
+        ) {
+          setDataset(null);
+          await clearAngkaSementaraDataset();
+        }
+        setSyncStatus('synced');
+        setSyncMessage('Belum ada file tersimpan di Supabase');
+      } else {
+        // Supabase belum memiliki snapshot Ranking Inflasi; jika perangkat ini punya data lokal lama, unggah otomatis
+        if (localCached && localCached.rows.length > 0) {
+          await saveAngkaSementaraToSupabase(localCached);
+          setSyncStatus('synced');
+          setSyncMessage('Data lokal berhasil disinkronkan ke Supabase');
+        } else {
+          setSyncStatus('synced');
+          setSyncMessage('Belum ada file tersimpan di Supabase');
+        }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Gagal menyinkronkan dengan Supabase.';
+      setSyncStatus('error');
+      setSyncMessage(msg);
+    }
+  }, []);
+
   useEffect(() => {
     let active = true;
-    loadAngkaSementaraDataset().then((stored) => {
+    (async () => {
+      const stored = await loadAngkaSementaraDataset();
       if (!active) return;
       if (stored) {
         setDataset(stored);
       }
       setIsRestoring(false);
-    });
+      if (isSupabaseConfigured) {
+        await syncFromSupabase(stored);
+      }
+    })();
     return () => {
       active = false;
     };
-  }, []);
+  }, [syncFromSupabase]);
 
   const index = useMemo(() => {
     if (!dataset) return null;
@@ -356,6 +424,27 @@ export const AngkaSementaraRankingView: React.FC = () => {
     });
   }, [dataset, index, selectedKalbarRegion, kalbarFlagLevel, kalbarCommoditySearch, kalbarSortKey, kalbarSortDir]);
 
+  const pushDatasetToSupabase = async (parsed: AngkaSementaraDataset) => {
+    if (!isSupabaseConfigured) {
+      setSyncStatus('local');
+      return;
+    }
+    setSyncStatus('syncing');
+    setSyncMessage('Mengunggah ke Supabase agar tersinkron lintas perangkat...');
+    try {
+      const res = await saveAngkaSementaraToSupabase(parsed);
+      setSyncStatus('synced');
+      setSyncMessage(
+        `Tersimpan di Supabase (${new Intl.NumberFormat('id-ID').format(res.rowCount)} baris)`
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Gagal menyinkronkan file ke Supabase.';
+      setSyncStatus('error');
+      setSyncMessage(msg);
+      setErrorMsg(`File dimuat secara lokal, tetapi sinkronisasi ke Supabase gagal: ${msg}`);
+    }
+  };
+
   const handleFileUpload = async (file: File) => {
     setErrorMsg(null);
     setIsLoading(true);
@@ -364,6 +453,7 @@ export const AngkaSementaraRankingView: React.FC = () => {
       setDataset(parsed);
       await saveAngkaSementaraDataset(parsed);
       setPage(1);
+      await pushDatasetToSupabase(parsed);
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Gagal membaca file Angka Sementara.');
     } finally {
@@ -384,6 +474,7 @@ export const AngkaSementaraRankingView: React.FC = () => {
       setDataset(parsed);
       await saveAngkaSementaraDataset(parsed);
       setPage(1);
+      await pushDatasetToSupabase(parsed);
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Gagal memuat contoh Angka Sementara.');
     } finally {
@@ -396,6 +487,19 @@ export const AngkaSementaraRankingView: React.FC = () => {
     setErrorMsg(null);
     setSearchQuery('');
     await clearAngkaSementaraDataset();
+    if (isSupabaseConfigured) {
+      setSyncStatus('syncing');
+      try {
+        await clearAngkaSementaraInSupabase();
+        setSyncStatus('synced');
+        setSyncMessage('Dataset dihapus di Supabase');
+      } catch (err) {
+        setSyncStatus('error');
+        setSyncMessage(
+          err instanceof Error ? err.message : 'Gagal menghapus snapshot di Supabase.'
+        );
+      }
+    }
   };
 
   const handleCrossSort = (key: CrossSortKey) => {
@@ -506,6 +610,58 @@ export const AngkaSementaraRankingView: React.FC = () => {
     );
   }
 
+  const renderSyncControls = () => (
+    <div className="flex flex-wrap items-center gap-2">
+      <div
+        title={syncMessage ?? undefined}
+        className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-semibold whitespace-nowrap ${
+          syncStatus === 'synced'
+            ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
+            : syncStatus === 'syncing'
+              ? 'border-sky-300 bg-sky-50 text-sky-800'
+              : syncStatus === 'error'
+                ? 'border-rose-300 bg-rose-50 text-rose-800'
+                : 'border-amber-300 bg-amber-50 text-amber-800'
+        }`}
+      >
+        {syncStatus === 'syncing' ? (
+          <>
+            <Loader2 className="h-3.5 w-3.5 animate-spin text-sky-700" />
+            <span>Sinkronisasi Supabase...</span>
+          </>
+        ) : syncStatus === 'synced' ? (
+          <>
+            <Database className="h-3.5 w-3.5 text-emerald-700" />
+            <span>Tersinkron Supabase</span>
+          </>
+        ) : syncStatus === 'error' ? (
+          <>
+            <Database className="h-3.5 w-3.5 text-rose-700" />
+            <span>Gagal Sinkron</span>
+          </>
+        ) : (
+          <>
+            <HardDrive className="h-3.5 w-3.5 text-amber-700" />
+            <span>Mode Lokal</span>
+          </>
+        )}
+      </div>
+
+      {isSupabaseConfigured && (
+        <button
+          type="button"
+          disabled={syncStatus === 'syncing' || isLoading}
+          onClick={() => syncFromSupabase(dataset)}
+          className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50 whitespace-nowrap"
+          title="Ambil dataset Ranking Inflasi terbaru dari Supabase"
+        >
+          <RefreshCw className={`h-3.5 w-3.5 ${syncStatus === 'syncing' ? 'animate-spin' : ''}`} />
+          <span>Muat Ulang DB</span>
+        </button>
+      )}
+    </div>
+  );
+
   // Empty state before any file is uploaded
   if (!dataset || !index) {
     return (
@@ -522,6 +678,7 @@ export const AngkaSementaraRankingView: React.FC = () => {
                 Unggah file Angka Sementara (.csv atau .xlsx) untuk mendeteksi posisi ranking inflasi MoM Provinsi Kalimantan Barat dan 5 Kab/Kota Kalbar secara otomatis.
               </p>
             </div>
+            {renderSyncControls()}
           </div>
 
           {errorMsg && (
@@ -658,11 +815,13 @@ export const AngkaSementaraRankingView: React.FC = () => {
           </div>
 
           <div className="flex flex-wrap items-center gap-2 shrink-0">
+            {renderSyncControls()}
+
             <button
               type="button"
-              disabled={isLoading}
+              disabled={isLoading || syncStatus === 'syncing'}
               onClick={() => fileInputRef.current?.click()}
-              className="inline-flex items-center gap-1.5 rounded-md bg-slate-900 px-3 py-1.5 text-xs font-bold text-white hover:bg-slate-800 whitespace-nowrap"
+              className="inline-flex items-center gap-1.5 rounded-md bg-slate-900 px-3 py-1.5 text-xs font-bold text-white hover:bg-slate-800 disabled:opacity-50 whitespace-nowrap"
             >
               <UploadCloud className="h-3.5 w-3.5" />
               <span>{isLoading ? 'Memuat...' : 'Upload File Baru'}</span>
@@ -680,8 +839,9 @@ export const AngkaSementaraRankingView: React.FC = () => {
 
             <button
               type="button"
+              disabled={syncStatus === 'syncing'}
               onClick={handleClearDataset}
-              className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-rose-50 hover:text-rose-700 hover:border-rose-200 whitespace-nowrap"
+              className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-rose-50 hover:text-rose-700 hover:border-rose-200 disabled:opacity-50 whitespace-nowrap"
               title="Hapus dataset Angka Sementara"
             >
               <Trash2 className="h-3.5 w-3.5" />

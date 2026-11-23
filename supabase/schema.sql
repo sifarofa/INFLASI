@@ -19,6 +19,7 @@ create table if not exists public.inflasi_lk_data (
   constraint inflasi_lk_data_unique_key unique (tahun, bulan, kode_wilayah, kode_komoditas)
 );
 
+-- Juga digunakan untuk snapshot sinkronisasi lintas perangkat Ranking Inflasi (ANGKA_SEMENTARA_*) dan rincian penuh RH Responden (RESP_SNAPSHOT_*)
 create table if not exists public.inflasi_upload_logs (
   id uuid default gen_random_uuid() primary key,
   tahun integer not null,

@@ -38,6 +38,7 @@ import {
   insertUploadLogsToSupabase,
   rolloverPrevMonthFromSupabase,
   saveRespondentDatasetToSupabase,
+  saveRespondentSnapshotToSupabase,
   upsertLKRowsBatchToSupabase,
 } from '../utils/supabaseSync';
 
@@ -168,6 +169,9 @@ export function useInflationStore() {
 
   const stateRef = useRef(state);
   stateRef.current = state;
+  const respondentDatasetsRef = useRef(respondentDatasets);
+  respondentDatasetsRef.current = respondentDatasets;
+  const snapshotSyncTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   const [connectionStatus, setConnectionStatus] = useState<SupabaseConnectionStatus>(
     isSupabaseConfigured ? 'syncing' : 'local'
@@ -333,17 +337,56 @@ export function useInflationStore() {
 
       if (respResult !== null) {
         respondentHydratedRef.current = true;
-        const annotatedResp: Record<string, RespondentRHDataset> = {};
-        for (const [k, ds] of Object.entries(respResult)) {
-          annotatedResp[k] = applyAnnotationsToDataset(ds);
-        }
-        setRespondentDatasetsState((prev) => {
-          if (Object.keys(annotatedResp).length > 0) {
-            // Merge active period datasets fetched from Supabase
-            return isPeriodSwitch ? annotatedResp : { ...prev, ...annotatedResp };
+        const backfillTargets: RespondentRHDataset[] = [];
+        const currentLocal = respondentDatasetsRef.current;
+        const nextMerged: Record<string, RespondentRHDataset> = isPeriodSwitch ? {} : { ...currentLocal };
+
+        for (const [k, remoteDs] of Object.entries(respResult)) {
+          const isFallbackSummary = remoteDs.fileName === 'Supabase (inflasi_harga_responden)';
+          const localDs = currentLocal[k];
+          const hasSamePeriodFullLocal =
+            Boolean(localDs) &&
+            localDs.period.year === targetPeriod.year &&
+            localDs.period.month === targetPeriod.month &&
+            Boolean(localDs.fileName) &&
+            localDs.fileName !== 'Supabase (inflasi_harga_responden)';
+
+          if (isFallbackSummary && hasSamePeriodFullLocal) {
+            nextMerged[k] = localDs;
+            backfillTargets.push(localDs);
+          } else if (isFallbackSummary) {
+            nextMerged[k] = applyAnnotationsToDataset(remoteDs);
+          } else {
+            nextMerged[k] = remoteDs;
           }
-          return isPeriodSwitch ? {} : prev;
-        });
+        }
+
+        // Jika masih ada dataset lokal penuh untuk periode aktif yang belum masuk Supabase, backfill otomatis
+        for (const [k, localDs] of Object.entries(currentLocal)) {
+          if (
+            !respResult[k] &&
+            localDs.period.year === targetPeriod.year &&
+            localDs.period.month === targetPeriod.month &&
+            localDs.observations.length > 0
+          ) {
+            nextMerged[k] = localDs;
+            backfillTargets.push(localDs);
+          }
+        }
+
+        setRespondentDatasetsState(nextMerged);
+
+        if (backfillTargets.length > 0) {
+          void (async () => {
+            for (const ds of backfillTargets) {
+              try {
+                await saveRespondentSnapshotToSupabase(ds);
+              } catch {
+                // Abaikan jika gagal backfill latar belakang
+              }
+            }
+          })();
+        }
       }
 
       setConnectionStatus('connected');
@@ -744,6 +787,19 @@ export function useInflationStore() {
     []
   );
 
+  const scheduleRespondentSnapshotSync = useCallback((dataset: RespondentRHDataset) => {
+    if (!isSupabaseConfigured || dataset.observations.length === 0) return;
+    const key = `${dataset.regionCode}_${dataset.frequency}`;
+    const existingTimer = snapshotSyncTimersRef.current[key];
+    if (existingTimer) clearTimeout(existingTimer);
+    snapshotSyncTimersRef.current[key] = setTimeout(() => {
+      delete snapshotSyncTimersRef.current[key];
+      void saveRespondentSnapshotToSupabase(dataset).catch(() => {
+        // Edit tetap tersimpan aman secara lokal jika koneksi sementara terputus
+      });
+    }, 650);
+  }, []);
+
   const updateRespondentAnnotation = useCallback(
     (
       regionCode: KabKotaCode,
@@ -752,34 +808,33 @@ export function useInflationStore() {
       patch: { catatan?: string; perluPerbaikan?: boolean }
     ) => {
       const scopedKey = `${regionCode}_${frequency}`;
-      respondentHydratedRef.current = true;
-      setRespondentDatasetsState((prev) => {
-        const ds = prev[scopedKey];
-        if (!ds) return prev;
-        let updatedTarget: typeof ds.observations[number] | null = null;
-        const nextObservations = ds.observations.map((obs) => {
-          if (obs.id !== observationId) return obs;
-          updatedTarget = {
-            ...obs,
-            catatan: patch.catatan !== undefined ? patch.catatan : obs.catatan,
-            perluPerbaikan:
-              patch.perluPerbaikan !== undefined ? patch.perluPerbaikan : obs.perluPerbaikan,
-          };
-          return updatedTarget;
-        });
-        if (updatedTarget) {
-          saveObservationAnnotation(ds.period, regionCode, frequency, updatedTarget, patch);
-        }
-        return {
-          ...prev,
-          [scopedKey]: {
-            ...ds,
-            observations: nextObservations,
-          },
+      const ds = respondentDatasetsRef.current[scopedKey];
+      if (!ds) return;
+      let updatedTarget: typeof ds.observations[number] | null = null;
+      const nextObservations = ds.observations.map((obs) => {
+        if (obs.id !== observationId) return obs;
+        updatedTarget = {
+          ...obs,
+          catatan: patch.catatan !== undefined ? patch.catatan : obs.catatan,
+          perluPerbaikan:
+            patch.perluPerbaikan !== undefined ? patch.perluPerbaikan : obs.perluPerbaikan,
         };
+        return updatedTarget;
       });
+      if (!updatedTarget) return;
+      saveObservationAnnotation(ds.period, regionCode, frequency, updatedTarget, patch);
+      const nextDs: RespondentRHDataset = {
+        ...ds,
+        observations: nextObservations,
+      };
+      respondentHydratedRef.current = true;
+      setRespondentDatasetsState((prev) => ({
+        ...prev,
+        [scopedKey]: nextDs,
+      }));
+      scheduleRespondentSnapshotSync(nextDs);
     },
-    []
+    [scheduleRespondentSnapshotSync]
   );
 
   const updateRespondentPrice = useCallback(
@@ -791,71 +846,71 @@ export function useInflationStore() {
       nextValue: number | null
     ) => {
       const scopedKey = `${regionCode}_${frequency}`;
-      respondentHydratedRef.current = true;
-      setRespondentDatasetsState((prev) => {
-        const ds = prev[scopedKey];
-        if (!ds) return prev;
-        let updatedTarget: typeof ds.observations[number] | null = null;
-        const nextObservations = ds.observations.map((obs) => {
-          if (obs.id !== observationId) return obs;
-          const nextCurrPrices = [...obs.currPrices];
-          if (priceIndex < 0 || priceIndex >= nextCurrPrices.length) return obs;
-          nextCurrPrices[priceIndex] =
-            nextValue !== null && Number.isFinite(nextValue) && nextValue > 0 ? nextValue : null;
-          updatedTarget = recalculateRespondentObservation(obs, nextCurrPrices);
-          return updatedTarget;
-        });
-        if (!updatedTarget) return prev;
-        const targetObs: typeof ds.observations[number] = updatedTarget;
-        saveObservationAnnotation(ds.period, regionCode, frequency, targetObs, {
-          currPrices: targetObs.currPrices,
-          originalCurrPrices: targetObs.originalCurrPrices,
-          hargaDiperbaiki: Boolean(targetObs.hargaDiperbaiki),
-        });
-        return {
-          ...prev,
-          [scopedKey]: {
-            ...ds,
-            observations: nextObservations,
-            commoditySummaries: summarizeRespondentRH(nextObservations, frequency),
-          },
-        };
+      const ds = respondentDatasetsRef.current[scopedKey];
+      if (!ds) return;
+      let updatedTarget: typeof ds.observations[number] | null = null;
+      const nextObservations = ds.observations.map((obs) => {
+        if (obs.id !== observationId) return obs;
+        const nextCurrPrices = [...obs.currPrices];
+        if (priceIndex < 0 || priceIndex >= nextCurrPrices.length) return obs;
+        nextCurrPrices[priceIndex] =
+          nextValue !== null && Number.isFinite(nextValue) && nextValue > 0 ? nextValue : null;
+        updatedTarget = recalculateRespondentObservation(obs, nextCurrPrices);
+        return updatedTarget;
       });
+      if (!updatedTarget) return;
+      const targetObs: typeof ds.observations[number] = updatedTarget;
+      saveObservationAnnotation(ds.period, regionCode, frequency, targetObs, {
+        currPrices: targetObs.currPrices,
+        originalCurrPrices: targetObs.originalCurrPrices,
+        hargaDiperbaiki: Boolean(targetObs.hargaDiperbaiki),
+      });
+      const nextDs: RespondentRHDataset = {
+        ...ds,
+        observations: nextObservations,
+        commoditySummaries: summarizeRespondentRH(nextObservations, frequency),
+      };
+      respondentHydratedRef.current = true;
+      setRespondentDatasetsState((prev) => ({
+        ...prev,
+        [scopedKey]: nextDs,
+      }));
+      scheduleRespondentSnapshotSync(nextDs);
     },
-    []
+    [scheduleRespondentSnapshotSync]
   );
 
   const resetRespondentPrice = useCallback(
     (regionCode: KabKotaCode, frequency: RespondentFrequency, observationId: string) => {
       const scopedKey = `${regionCode}_${frequency}`;
-      respondentHydratedRef.current = true;
-      setRespondentDatasetsState((prev) => {
-        const ds = prev[scopedKey];
-        if (!ds) return prev;
-        let updatedTarget: typeof ds.observations[number] | null = null;
-        const nextObservations = ds.observations.map((obs) => {
-          if (obs.id !== observationId || !obs.originalCurrPrices) return obs;
-          updatedTarget = recalculateRespondentObservation(obs, obs.originalCurrPrices);
-          return updatedTarget;
-        });
-        if (!updatedTarget) return prev;
-        const targetObs: typeof ds.observations[number] = updatedTarget;
-        saveObservationAnnotation(ds.period, regionCode, frequency, targetObs, {
-          currPrices: targetObs.currPrices,
-          originalCurrPrices: undefined,
-          hargaDiperbaiki: false,
-        });
-        return {
-          ...prev,
-          [scopedKey]: {
-            ...ds,
-            observations: nextObservations,
-            commoditySummaries: summarizeRespondentRH(nextObservations, frequency),
-          },
-        };
+      const ds = respondentDatasetsRef.current[scopedKey];
+      if (!ds) return;
+      let updatedTarget: typeof ds.observations[number] | null = null;
+      const nextObservations = ds.observations.map((obs) => {
+        if (obs.id !== observationId || !obs.originalCurrPrices) return obs;
+        updatedTarget = recalculateRespondentObservation(obs, obs.originalCurrPrices);
+        return updatedTarget;
       });
+      if (!updatedTarget) return;
+      const targetObs: typeof ds.observations[number] = updatedTarget;
+      saveObservationAnnotation(ds.period, regionCode, frequency, targetObs, {
+        currPrices: targetObs.currPrices,
+        originalCurrPrices: undefined,
+        hargaDiperbaiki: false,
+      });
+      const nextDs: RespondentRHDataset = {
+        ...ds,
+        observations: nextObservations,
+        commoditySummaries: summarizeRespondentRH(nextObservations, frequency),
+      };
+      respondentHydratedRef.current = true;
+      setRespondentDatasetsState((prev) => ({
+        ...prev,
+        [scopedKey]: nextDs,
+      }));
+      scheduleRespondentSnapshotSync(nextDs);
     },
-    []
+    [scheduleRespondentSnapshotSync]
   );
 
   const resetToInitialData = useCallback(() => {
